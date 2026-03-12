@@ -233,7 +233,7 @@ def hyper_param_experiment():
                                     batch_size=batch_size,
                                     learning_rate=learning_rate,
                                     data_input=input_data,
-                                    model='FEDformer',
+                                    model='HierDA',
                                     seed=2021,
                                     i=month_data,
                                     loss_k=loss_k,
@@ -277,4 +277,17 @@ if __name__ == '__main__':
     #       learning_rate=0.005, data_input=input_data, model='FEDformer', seed=2021, i=202305, loss_k=2.0, loss_type='Custom')
 
     # 方式2：运行超参数试验（重点：遍历不同k值和模型参数）
-    hyper_param_experiment()
+    # hyper_param_experiment()
+    start(
+        feature_select='time_trends_slide',
+        dimension_model=128,
+        encoder_layers=2,
+        batch_size=16,
+        learning_rate=0.001,
+        data_input='deep_train_202305.csv',
+        model='HierDA',
+        seed=2021,
+        i=202305,
+        loss_k=2.0,
+        loss_type='Custom'
+    )

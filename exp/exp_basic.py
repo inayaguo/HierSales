@@ -1,6 +1,6 @@
 import os
 import torch
-from models import (Autoformer, Transformer, TimesNet, Nonstationary_Transformer, FEDformer)
+from models import (Autoformer, Transformer, TimesNet, Nonstationary_Transformer, FEDformer, HierDA)
 # , DLinear, , \
 #     Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, FiLM)
 
@@ -15,6 +15,7 @@ class Exp_Basic(object):
             'Nonstationary_Transformer': Nonstationary_Transformer,
             # 'DLinear': DLinear,
             'FEDformer': FEDformer,
+            'HierDA': HierDA,
             # 'Informer': Informer,
             # 'LightTS': LightTS,
             # 'Reformer': Reformer,

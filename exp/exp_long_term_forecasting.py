@@ -775,6 +775,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         outputs = outputs[:, -self.args.pred_len:, f_dim:]
                         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
                         loss = criterion(outputs, batch_y)
+                        if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
+                            loss = loss + self.model.extra_loss
                         train_loss.append(loss.item())
                 else:
                     if self.args.output_attention:
@@ -786,6 +788,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
                     batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
                     loss = criterion(outputs, batch_y)
+                    if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
+                        loss = loss + self.model.extra_loss
                     train_loss.append(loss.item())
 
                 if (i + 1) % 10 == 0:
