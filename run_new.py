@@ -10,8 +10,7 @@ torch.cuda.manual_seed_all(seed=1)
 print(torch.cuda.is_available())
 print(torch.cuda.device_count())
 
-def start(feature_select, dimension_model, encoder_layers, batch_size, learning_rate, data_input, model, seed, i,
-          loss_k=2, loss_type='MSE'):
+def start(feature_select, dimension_model, encoder_layers, batch_size, learning_rate, is_training, data_input, model, seed, i, loss_k=2, loss_type='MSE'):
     """
     新增参数：
     loss_k: 自定义损失函数的惩罚系数k
@@ -28,7 +27,7 @@ def start(feature_select, dimension_model, encoder_layers, batch_size, learning_
     # basic config
     parser.add_argument('--task_name', type=str, required=False, default='long_term_forecast',
                         help='task name, options:[long_term_forecast, short_term_forecast, imputation, classification, anomaly_detection]')
-    parser.add_argument('--is_training', type=int, required=False, default=1, help='status')
+    parser.add_argument('--is_training', type=int, required=False, default=is_training, help='status')
     parser.add_argument('--model_id', type=str, required=False, default='test', help='model id')
     parser.add_argument('--model', type=str, required=False, default=model,
                         help='model name, options: [Autoformer, Transformer, TimesNet, FEDformer]')
@@ -288,5 +287,6 @@ if __name__ == '__main__':
         seed=2021,
         i=202305,
         loss_k=2.0,
-        loss_type='Custom'
+        loss_type='Custom',
+        is_training=1
     )

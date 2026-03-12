@@ -166,7 +166,7 @@ class DomainClassifier(nn.Module):
             nn.Linear(feat_dim, 32),
             nn.ReLU(),
             nn.Linear(32, 1),
-            nn.Sigmoid()
+            # nn.Sigmoid()
         )
 
     def forward(self, feat):
@@ -175,12 +175,21 @@ class DomainClassifier(nn.Module):
 # ===================== 5. 整体HierDA模型（串联所有模块） =====================
 class Model(nn.Module):
     """整体HierDA模型（对齐算法框架全流程）"""
-    def __init__(self, seq_len, input_dim, granularity_levels=3, device='cpu'):
+    def __init__(self, configs, granularity_levels=3):
         super(Model, self).__init__()
+        seq_len = configs.seq_len
+        input_dim = configs.enc_in
+        device = 'cuda' if configs.use_gpu else 'cpu'
+
         self.device = device
         self.granularity_levels = granularity_levels
         self.seq_len = seq_len
         self.input_dim = input_dim
+
+        self.pred_len = configs.pred_len
+        self.label_len = configs.label_len
+        self.extra_loss = None # 初始化辅助损失
+
         feat_dim = 128  # time_feat_dim(64) + freq_feat_dim(64)
 
         # 模块1：数据补全VAE
@@ -198,54 +207,57 @@ class Model(nn.Module):
         # 模块4：域分类器
         self.domain_classifier = DomainClassifier(feat_dim=feat_dim).to(device)
 
-    def forward(self, source_data, source_mask, target_data, target_mask, target_label):
+    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         """
-        前向传播全流程：
-        1. 数据补全 → 2. 多粒度特征提取 → 3. 特征对齐 → 4. 预测+域分类
+        标准encoder-decoder接口，兼容训练循环调用方式。
+        x_enc:      (batch, seq_len, input_dim)  — 编码器输入（源域）
+        x_mark_enc: (batch, seq_len, time_dim)   — 编码器时间特征（暂不使用）
+        x_dec:      (batch, label_len+pred_len, input_dim) — 解码器输入（目标域）
+        x_mark_dec: (batch, label_len+pred_len, time_dim)  — 解码器时间特征（暂不使用）
         """
-        # Step1: 销售数据补全（基于显式规则的mask）
+        # 将解码器输入中的预测部分作为目标域数据
+        # x_dec前label_len步为已知，后pred_len步为待预测（已被置零）
+        source_data = x_enc  # (batch, seq_len, input_dim)
+        target_data = x_dec[:, :self.label_len, :]  # (batch, label_len, input_dim) 用已知的label部分
+
+        # 自动生成mask（全0，表示无缺失；如有真实缺失逻辑可替换）
+        source_mask = torch.zeros_like(source_data)
+        target_mask = torch.zeros_like(target_data)
+
+        # Step1: 数据补全（VAE）
         source_completed, s_mu, s_logvar = self.vae_completion(source_data, source_mask)
         target_completed, t_mu, t_logvar = self.vae_completion(target_data, target_mask)
 
-        # Step2: 多粒度特征提取（源域+目标域）
+        # Step2: 多粒度特征提取
         source_feats = self.feat_extractor(source_completed, is_source=True)
         target_feats = self.feat_extractor(target_completed, is_source=False)
 
-        # Step3: 多粒度特征对齐损失 Loss F
+        # Step3: 域对齐损失 + VAE损失（存入extra_loss供训练循环使用）
         loss_f = multi_level_alignment_loss(source_feats, target_feats)
 
-        # Step4: 销售预测损失 Loss P（用目标域最后一层特征做预测）
-        target_final_feat = target_feats[-1]  # 取最高粒度特征
-        sales_pred = self.sales_predictor(target_final_feat)
-        loss_p = F.mse_loss(sales_pred.squeeze(), target_label)  # 回归损失（销售预测）
-
-        # Step5: 域分类损失 Loss C（对抗训练，区分源/目标域）
         source_final_feat = source_feats[-1]
-        # 拼接源/目标特征，生成域标签（0=源域，1=目标域）
+        target_final_feat = target_feats[-1]
         domain_feat = torch.cat([source_final_feat, target_final_feat], dim=0)
         domain_label = torch.cat([
             torch.zeros(source_final_feat.shape[0]),
             torch.ones(target_final_feat.shape[0])
-        ]).to(self.device)
+        ]).to(source_data.device)
         domain_pred = self.domain_classifier(domain_feat).squeeze()
-        loss_c = F.binary_cross_entropy(domain_pred, domain_label)
+        loss_c = F.binary_cross_entropy_with_logits(domain_pred, domain_label)
 
-        # Step6: VAE补全损失
         loss_vae_s = self.vae_completion.loss_fn(source_completed, source_data, s_mu, s_logvar)
         loss_vae_t = self.vae_completion.loss_fn(target_completed, target_data, t_mu, t_logvar)
         loss_vae = (loss_vae_s + loss_vae_t) / 2
 
-        # 总损失：可调整各损失权重
-        total_loss = loss_f * 0.2 + loss_p * 0.5 + loss_c * 0.2 + loss_vae * 0.1
+        # 将辅助损失挂载到模型上，训练循环中会累加
+        self.extra_loss = loss_f * 0.2 + loss_c * 0.2 + loss_vae * 0.1
 
-        return {
-            'total_loss': total_loss,
-            'loss_f': loss_f,
-            'loss_p': loss_p,
-            'loss_c': loss_c,
-            'loss_vae': loss_vae,
-            'sales_pred': sales_pred
-        }
+        # Step4: 预测输出 —— 将target特征映射回 (batch, pred_len, input_dim)
+        pred = self.sales_predictor(target_final_feat)  # (batch, 1)
+        # 扩展为标准输出形状 (batch, pred_len, input_dim)
+        pred = pred.unsqueeze(1).expand(-1, self.pred_len, self.input_dim)
+
+        return pred
 
 # # ===================== 6. 测试代码（验证框架流程） =====================
 # if __name__ == "__main__":

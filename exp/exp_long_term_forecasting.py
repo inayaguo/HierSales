@@ -62,14 +62,19 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.model.eval()
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
-                batch_x = batch_x.float().cuda()
-                batch_y = batch_y.float().cuda()
-                batch_x_mark = batch_x_mark.float().cuda()
-                batch_y_mark = batch_y_mark.float().cuda()
+                # batch_x = batch_x.float().cuda()
+                # batch_y = batch_y.float().cuda()
+                # batch_x_mark = batch_x_mark.float().cuda()
+                # batch_y_mark = batch_y_mark.float().cuda()
+                batch_x = batch_x.float().to(self.device)
+                batch_y = batch_y.float().to(self.device)
+                batch_x_mark = batch_x_mark.float().to(self.device)
+                batch_y_mark = batch_y_mark.float().to(self.device)
 
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().cuda()
+                # dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().cuda()
+                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
 
                 # encoder - decoder
                 if self.args.use_amp:
@@ -85,7 +90,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
+                # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
+                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                 pred = outputs.detach().cpu()
                 true = batch_y.detach().cpu()
                 loss = criterion(pred, true)
@@ -209,7 +215,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                         f_dim = -1 if self.args.features == 'MS' else 0
                         outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                        batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
+                        # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
+                        batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                         loss = criterion(outputs, batch_y)
                         if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
                             loss = loss + self.model.extra_loss
@@ -222,7 +229,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                     f_dim = -1 if self.args.features == 'MS' else 0
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
+                    # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
+                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                     loss = criterion(outputs, batch_y)
                     if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
                         loss = loss + self.model.extra_loss
@@ -251,29 +259,29 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} ".format(
                 epoch + 1, train_steps, train_loss, vali_loss))
 
-            # ===================== 核心新增：调用参数保存和打印函数 =====================
-            # 每 save_interval 个epoch执行一次，或最后一个epoch强制执行
-            if (epoch + 1) % save_interval == 0 or (epoch + 1) == self.args.train_epochs:
-                print(f"\n---------- Epoch {epoch + 1}: 保存Embedding参数并打印特征贡献度 ----------")
-                # 保存模型参数权重
-                self.model.save_embedding_weights()
-                # 打印特征贡献度（传入args作为configs）
-                # self.model.print_feature_contribution(self.args)
-                enc_core_weights, dec_core_weights = self.model.print_feature_contribution(self.args)
-                self.save_weights_to_csv(epoch + 1, self.args.month_predict, enc_core_weights, dec_core_weights)
-
-            # ==========================================================================
-
-            early_stopping(vali_loss, self.model, path)
-            if early_stopping.early_stop:
-                # 早停时也保存一次最终的参数
-                print("\n---------- 早停触发：保存最终Embedding参数 ----------")
-                self.model.save_embedding_weights()
-                # self.model.print_feature_contribution(self.args)
-                enc_core_weights, dec_core_weights = self.model.print_feature_contribution(self.args)
-                self.save_weights_to_csv(epoch + 1, self.args.month_predict, enc_core_weights, dec_core_weights)
-                print("Early stopping")
-                break
+            # # ===================== 核心新增：调用参数保存和打印函数 =====================
+            # # 每 save_interval 个epoch执行一次，或最后一个epoch强制执行
+            # if (epoch + 1) % save_interval == 0 or (epoch + 1) == self.args.train_epochs:
+            #     print(f"\n---------- Epoch {epoch + 1}: 保存Embedding参数并打印特征贡献度 ----------")
+            #     # 保存模型参数权重
+            #     self.model.save_embedding_weights()
+            #     # 打印特征贡献度（传入args作为configs）
+            #     # self.model.print_feature_contribution(self.args)
+            #     enc_core_weights, dec_core_weights = self.model.print_feature_contribution(self.args)
+            #     self.save_weights_to_csv(epoch + 1, self.args.month_predict, enc_core_weights, dec_core_weights)
+            #
+            # # ==========================================================================
+            #
+            # early_stopping(vali_loss, self.model, path)
+            # if early_stopping.early_stop:
+            #     # 早停时也保存一次最终的参数
+            #     print("\n---------- 早停触发：保存最终Embedding参数 ----------")
+            #     self.model.save_embedding_weights()
+            #     # self.model.print_feature_contribution(self.args)
+            #     enc_core_weights, dec_core_weights = self.model.print_feature_contribution(self.args)
+            #     self.save_weights_to_csv(epoch + 1, self.args.month_predict, enc_core_weights, dec_core_weights)
+            #     print("Early stopping")
+            #     break
 
             adjust_learning_rate(model_optim, epoch + 1, self.args)
 
@@ -282,8 +290,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         # 训练结束后，再次确认保存一次最优模型的参数
         print("\n---------- 训练完成：保存最优模型Embedding参数 ----------")
-        self.model.save_embedding_weights()
-        self.model.print_feature_contribution(self.args)
+        # self.model.save_embedding_weights()
+        # self.model.print_feature_contribution(self.args)
 
         return self.model
 
@@ -302,14 +310,19 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.model.eval()
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
-                batch_x = batch_x.float().cuda()
-                batch_y = batch_y.float().cuda()
-                batch_x_mark = batch_x_mark.float().cuda()
-                batch_y_mark = batch_y_mark.float().cuda()
+                # batch_x = batch_x.float().cuda()
+                # batch_y = batch_y.float().cuda()
+                # batch_x_mark = batch_x_mark.float().cuda()
+                # batch_y_mark = batch_y_mark.float().cuda()
+                batch_x = batch_x.float().to(self.device)
+                batch_y = batch_y.float().to(self.device)
+                batch_x_mark = batch_x_mark.float().to(self.device)
+                batch_y_mark = batch_y_mark.float().to(self.device)
 
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len:, :], dec_inp], dim=1).float().cuda()
+                # dec_inp = torch.cat([batch_y[:, :self.args.label_len:, :], dec_inp], dim=1).float().cuda()
+                dec_inp = torch.cat([batch_y[:, :self.args.label_len:, :], dec_inp], dim=1).float().to(self.device)
 
                 # encoder - decoder
                 if self.args.use_amp:
@@ -326,7 +339,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
+                # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
+                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                 outputs = outputs.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()
 
