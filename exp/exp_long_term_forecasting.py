@@ -20,12 +20,10 @@ warnings.filterwarnings('ignore')
 class Exp_Long_Term_Forecast(Exp_Basic):
     def __init__(self, args):
         super(Exp_Long_Term_Forecast, self).__init__(args)
-        # 新增：从args中获取损失函数惩罚系数k，默认2
         self.loss_k = args.loss_k if hasattr(args, 'loss_k') else 2
 
     def _build_model(self):
         model = self.model_dict[self.args.model].Model(self.args).float()
-
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
@@ -35,21 +33,27 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return data_set, data_loader
 
     def _select_optimizer(self):
-        model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
+        # 对 output_scale 单独设置更小的学习率
+        output_scale_params = [p for n, p in self.model.named_parameters() if 'output_scale' in n]
+        other_params = [p for n, p in self.model.named_parameters() if 'output_scale' not in n]
+
+        model_optim = optim.Adam([
+            {'params': other_params, 'lr': self.args.learning_rate},
+            {'params': output_scale_params, 'lr': self.args.learning_rate * 0.1}
+        ])
         return model_optim
+        # return optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
 
     def _select_criterion(self):
-        # 改为使用实例变量self.loss_k
         return self.log_reg_obj
 
     def _select_criterion_mse(self):
         return nn.MSELoss()
 
     def log_reg_obj(self, preds, true):
-        k = self.loss_k  # 动态获取k值
+        k = self.loss_k
         preds, true = preds[:, :, 0], true[:, :, 0]
         gap = abs(preds - true)
-        # 新增：处理true为0的情况，避免除以0
         gap_ratio = gap / torch.where(true == 0, torch.ones_like(true), true)
         loss = torch.where(gap_ratio > 0.2, k * gap_ratio, gap_ratio)
         loss = torch.squeeze(loss)
@@ -61,42 +65,23 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         preds, trues = [], []
         self.model.eval()
         with torch.no_grad():
-            # for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(
-                    vali_loader):
-                # batch_x = batch_x.float().cuda()
-                # batch_y = batch_y.float().cuda()
-                # batch_x_mark = batch_x_mark.float().cuda()
-                # batch_y_mark = batch_y_mark.float().cuda()
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(vali_loader):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
 
-                # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                # dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().cuda()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
 
-                # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
-                        else:
-                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
-                else:
-                    if self.args.output_attention:
-                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
-                    else:
-                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                         outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
+                else:
+                    outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
+
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                 pred = outputs.detach().cpu()
                 true = batch_y.detach().cpu()
@@ -105,62 +90,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 preds.append(pred.numpy())
                 trues.append(true.numpy())
 
-        # preds = np.array(preds)
-        # trues = np.array(trues)
-        # preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
-        # trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
-
-        print('test shape:', preds.shape)
-        print('true shape:', trues.shape)
+        print('vali shape:', preds.shape, trues.shape)
         self.cal_acc(preds, trues)
         total_loss = np.average(total_loss)
         self.model.train()
         return total_loss
-
-    def save_weights_to_csv(self, epoch, month, enc_core_weights, dec_core_weights):
-        base_dir = "/kaggle/working"
-        result_dir = os.path.join(base_dir, "result")
-        result_path = os.path.join(result_dir, "weights_second_col_summary.csv")
-
-        if os.path.exists(base_dir):
-            os.makedirs(result_dir, exist_ok=True)
-
-            # 提取特征贡献度（加异常处理）
-            try:
-                enc_second_col = enc_core_weights["feature_contribution"]
-                enc_second_col = enc_second_col if isinstance(enc_second_col, (list, np.ndarray)) else [enc_second_col]
-            except:
-                enc_second_col = []
-
-            try:
-                dec_second_col = dec_core_weights["feature_contribution"]
-                dec_second_col = dec_second_col if isinstance(dec_second_col, (list, np.ndarray)) else [dec_second_col]
-            except:
-                dec_second_col = []
-
-            # 准备数据
-            header = 'epoch,month,enc_core_second_col,dec_core_second_col\n'
-            max_len = max(len(enc_second_col), len(dec_second_col))
-            data_rows = []
-            for i in range(max_len):
-                enc_val = enc_second_col[i] if i < len(enc_second_col) else ""
-                dec_val = dec_second_col[i] if i < len(dec_second_col) else ""
-                data_row = f'{epoch},{month},{enc_val:.4f},{dec_val:.4f}\n' if isinstance(enc_val,
-                                                                                          (int, float)) and isinstance(
-                    dec_val, (int, float)) else f'{epoch},{month},{enc_val},{dec_val}\n'
-                data_rows.append(data_row)
-
-            # 写入CSV
-            if not os.path.exists(result_path):
-                with open(result_path, 'w', encoding='utf-8') as f:
-                    f.write(header)
-            with open(result_path, 'a', encoding='utf-8') as f:
-                f.writelines(data_rows)
-            print(f"✅ 数据写入成功：{result_path}")
-        else:
-            print(f"❌ 基础目录 {base_dir} 不存在")
 
     def train(self, setting):
         print('------------------loading dataset------------------')
@@ -168,17 +104,18 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         vali_data, vali_loader = self._get_data(flag='val')
         test_data, test_loader = self._get_data(flag='test')
         print('------------------finish with dataset------------------')
+
         path = os.path.join(self.args.checkpoints, setting)
         if not os.path.exists(path):
             os.makedirs(path)
 
         time_now = time.time()
-
         train_steps = len(train_loader)
+
+        # ── 修复1：恢复 EarlyStopping，确保 checkpoint 被正确保存 ──
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
         model_optim = self._select_optimizer()
-        # 新增：支持选择自定义损失函数或MSE
         if self.args.loss == 'Custom':
             criterion = self._select_criterion()
         else:
@@ -187,67 +124,69 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
 
-        # 新增：设置参数保存/打印的间隔（可根据需求调整）
-        save_interval = 5  # 每5个epoch保存一次参数、打印一次特征贡献度
-
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
 
             self.model.train()
             epoch_time = time.time()
-            # for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(
-                        train_loader):
+
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(train_loader):
                 iter_count += 1
                 model_optim.zero_grad()
-                # batch_x = batch_x.float().cuda()
-                # batch_y = batch_y.float().cuda()
-                # batch_x_mark = batch_x_mark.float().cuda()
-                # batch_y_mark = batch_y_mark.float().cuda()
+
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
 
-                # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                # dec_inp = torch.cat([batch_y[:, :self.args.label_len:, :], dec_inp], dim=1).float().cuda()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len:, :], dec_inp], dim=1).float().to(self.device)
 
-                # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
-                        else:
-                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
+                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
+                        print(f'outputs[:,0,0] 前5个值: {outputs[:, 0, 0][:5].detach().cpu().numpy()}')
+                        print(f'batch_y[:,0,0] 前5个值: {batch_y[:, 0, 0][:5].detach().cpu().numpy()}')
+
+                        # 加这几行排查
+                        print(f'batch_x_src has nan: {torch.isnan(batch_x_src).any()}')
+                        print(f'batch_x has nan: {torch.isnan(batch_x).any()}')
+                        print(f'outputs has nan: {torch.isnan(outputs).any()}')
+                        print(f'batch_y has nan: {torch.isnan(batch_y).any()}')
 
                         f_dim = -1 if self.args.features == 'MS' else 0
                         outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                        # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
                         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                         loss = criterion(outputs, batch_y)
                         if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
+                            # 新增：打印各损失分项
+                            print(f'main_loss={loss.item():.4f}, extra_loss={self.model.extra_loss.item():.4f}')
                             loss = loss + self.model.extra_loss
+                        # if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
+                        #     loss = loss + self.model.extra_loss
                         train_loss.append(loss.item())
                 else:
-                    if self.args.output_attention:
-                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
-                    else:
-                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
+                    outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
+                    print(f'outputs[:,0,0] 前5个值: {outputs[:, 0, 0][:5].detach().cpu().numpy()}')
+                    print(f'batch_y[:,0,0] 前5个值: {batch_y[:, 0, 0][:5].detach().cpu().numpy()}')
+
+                    # 加这几行排查
+                    print(f'batch_x_src has nan: {torch.isnan(batch_x_src).any()}')
+                    print(f'batch_x has nan: {torch.isnan(batch_x).any()}')
+                    print(f'outputs has nan: {torch.isnan(outputs).any()}')
+                    print(f'batch_y has nan: {torch.isnan(batch_y).any()}')
 
                     f_dim = -1 if self.args.features == 'MS' else 0
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                    # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
                     batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                     loss = criterion(outputs, batch_y)
                     if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
+                        # 新增：打印各损失分项
+                        print(f'main_loss={loss.item():.4f}, extra_loss={self.model.extra_loss.item():.4f}')
                         loss = loss + self.model.extra_loss
+                    # if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
+                    #     loss = loss + self.model.extra_loss
                     train_loss.append(loss.item())
 
                 if (i + 1) % 10 == 0:
@@ -264,48 +203,31 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     scaler.update()
                 else:
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     model_optim.step()
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
             vali_loss = self.vali(vali_data, vali_loader, criterion)
 
-            print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} ".format(
+            print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f}".format(
                 epoch + 1, train_steps, train_loss, vali_loss))
 
-            # # ===================== 核心新增：调用参数保存和打印函数 =====================
-            # # 每 save_interval 个epoch执行一次，或最后一个epoch强制执行
-            # if (epoch + 1) % save_interval == 0 or (epoch + 1) == self.args.train_epochs:
-            #     print(f"\n---------- Epoch {epoch + 1}: 保存Embedding参数并打印特征贡献度 ----------")
-            #     # 保存模型参数权重
-            #     self.model.save_embedding_weights()
-            #     # 打印特征贡献度（传入args作为configs）
-            #     # self.model.print_feature_contribution(self.args)
-            #     enc_core_weights, dec_core_weights = self.model.print_feature_contribution(self.args)
-            #     self.save_weights_to_csv(epoch + 1, self.args.month_predict, enc_core_weights, dec_core_weights)
-            #
-            # # ==========================================================================
-            #
-            # early_stopping(vali_loss, self.model, path)
-            # if early_stopping.early_stop:
-            #     # 早停时也保存一次最终的参数
-            #     print("\n---------- 早停触发：保存最终Embedding参数 ----------")
-            #     self.model.save_embedding_weights()
-            #     # self.model.print_feature_contribution(self.args)
-            #     enc_core_weights, dec_core_weights = self.model.print_feature_contribution(self.args)
-            #     self.save_weights_to_csv(epoch + 1, self.args.month_predict, enc_core_weights, dec_core_weights)
-            #     print("Early stopping")
-            #     break
+            # ── 修复2：正确调用 early_stopping，保存 checkpoint ──
+            early_stopping(vali_loss, self.model, path)
+            if early_stopping.early_stop:
+                print("Early stopping")
+                break
 
             adjust_learning_rate(model_optim, epoch + 1, self.args)
 
-        best_model_path = path + '/' + 'checkpoint.pth'
-        self.model.load_state_dict(torch.load(best_model_path))
-
-        # 训练结束后，再次确认保存一次最优模型的参数
-        print("\n---------- 训练完成：保存最优模型Embedding参数 ----------")
-        # self.model.save_embedding_weights()
-        # self.model.print_feature_contribution(self.args)
+        # ── 修复3：加载训练过程中保存的最优 checkpoint ──
+        best_model_path = os.path.join(path, 'checkpoint.pth')
+        if os.path.exists(best_model_path):
+            self.model.load_state_dict(torch.load(best_model_path))
+            print(f"已加载最优模型：{best_model_path}")
+        else:
+            print("警告：未找到 checkpoint 文件，使用训练结束时的模型权重")
 
         return self.model
 
@@ -313,7 +235,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         test_data, test_loader = self._get_data(flag='test')
         if test:
             print('loading model')
-            self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+            ckpt_path = os.path.join('./checkpoints/' + setting, 'checkpoint.pth')
+            if os.path.exists(ckpt_path):
+                self.model.load_state_dict(torch.load(ckpt_path))
+            else:
+                print(f"警告：checkpoint 不存在：{ckpt_path}")
 
         preds = []
         trues = []
@@ -323,59 +249,29 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         self.model.eval()
         with torch.no_grad():
-            # for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(
-                        test_loader):
-                # batch_x = batch_x.float().cuda()
-                # batch_y = batch_y.float().cuda()
-                # batch_x_mark = batch_x_mark.float().cuda()
-                # batch_y_mark = batch_y_mark.float().cuda()
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(test_loader):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
 
-                # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                # dec_inp = torch.cat([batch_y[:, :self.args.label_len:, :], dec_inp], dim=1).float().cuda()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len:, :], dec_inp], dim=1).float().to(self.device)
 
-                # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
-                        else:
-                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
-                else:
-                    if self.args.output_attention:
-                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
-                    else:
-                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                         outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
+                else:
+                    outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
+
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                outputs = outputs.detach().cpu().numpy()
-                batch_y = batch_y.detach().cpu().numpy()
+                preds.append(outputs.detach().cpu().numpy())
+                trues.append(batch_y.detach().cpu().numpy())
 
-                pred = outputs
-                true = batch_y
-                preds.append(pred)
-                trues.append(true)
-
-        # preds = np.array(preds)
-        # trues = np.array(trues)
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
-        # print('test shape:', preds.shape)
-        # print('true shape:', trues.shape)
-        # preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
-        # trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         self.cal_acc(preds, trues)
         return
 
@@ -390,16 +286,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         filtered_trues = trues_flat[valid_indices]
         filtered_preds = preds_flat[valid_indices]
 
-        # 保存预测结果（区分不同k值）
         df = pd.DataFrame({
             'true': filtered_trues,
             'predict': filtered_preds,
-            'loss_k': [self.loss_k] * len(filtered_trues)  # 新增：记录当前k值
+            'loss_k': [self.loss_k] * len(filtered_trues)
         })
         csv_name = f"{self.args.month_predict}_predict_k{self.loss_k}.csv"
         df.to_csv(csv_name, index=False)
 
-        # 计算评估指标
         mae, mse, rmse, mape, mspe = metric(filtered_preds, filtered_trues)
         result = []
         for i in range(len(filtered_trues)):
@@ -409,43 +303,24 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 result.append(0)
         store_acc = sum(result) / len(result) if len(result) > 0 else 0
 
-        # 打印详细信息（包含k值）
         print(f'===== Loss k={self.loss_k} =====')
         print(f'mse:{mse:.4f}, mae:{mae:.4f}, mape:{mape:.4f}, store_acc:{store_acc:.4f}')
-        print(
-            f'batch_size:{self.args.batch_size}, encoder_layers:{self.args.e_layers}, lr:{self.args.learning_rate}, d_model:{self.args.d_model}')
+        print(f'batch_size:{self.args.batch_size}, encoder_layers:{self.args.e_layers}, lr:{self.args.learning_rate}, d_model:{self.args.d_model}')
 
-        # 保存k值对比结果
-        # 1. 定义基础路径和目标文件路径
-        base_dir = "/kaggle/working"
+        base_dir = "output_hiersales"
         result_dir = os.path.join(base_dir, "result")
         result_path = os.path.join(result_dir, "k_value_experiment.csv")
 
-        # 2. 检查并创建基础目录和子文件夹（确保路径存在）
-        if os.path.exists(base_dir):  # 先判断kaggle/working是否存在
-            os.makedirs(result_dir, exist_ok=True)  # 创建result子文件夹，已存在则不报错
-
-            # 3. 准备写入内容（表头+数据行）
+        if os.path.exists(base_dir):
+            os.makedirs(result_dir, exist_ok=True)
             header = 'model,loss_k,month,d_model,encoder_layers,batch_size,learning_rate,mae,mse,rmse,mape,mspe,store_acc\n'
             data_row = f'{self.args.model},{self.loss_k},{self.args.month_predict},{self.args.d_model},{self.args.e_layers},{self.args.batch_size},{self.args.learning_rate},{mae:.4f},{mse:.4f},{rmse:.4f},{mape:.4f},{mspe:.4f},{store_acc:.4f}\n'
-
-            # 4. 写入文件（不存在则创建+写表头，存在则追加数据）
             if not os.path.exists(result_path):
                 with open(result_path, 'w', encoding='utf-8') as f:
-                    f.write(header)  # 新文件先写表头
+                    f.write(header)
             with open(result_path, 'a', encoding='utf-8') as f:
-                f.write(data_row)  # 追加写入数据行
+                f.write(data_row)
         else:
             print(f"基础目录 {base_dir} 不存在，无法写入文件")
-
-        # result_path = "/kaggle/working/result/k_value_experiment.csv"
-        # if not os.path.exists(result_path):
-        #     with open(result_path, 'w', encoding='utf-8') as f:
-        #         f.write(
-        #             'model,loss_k,month,d_model,encoder_layers,batch_size,learning_rate,mae,mse,rmse,mape,mspe,store_acc\n')
-        #
-        # with open(result_path, 'a', encoding='utf-8') as f:
-        #     f.write(
-        #         f'{self.args.model},{self.loss_k},{self.args.month_predict},{self.args.d_model},{self.args.e_layers},{self.args.batch_size},{self.args.learning_rate},{mae:.4f},{mse:.4f},{rmse:.4f},{mape:.4f},{mspe:.4f},{store_acc:.4f}\n')
 
         return

@@ -10,7 +10,7 @@ torch.cuda.manual_seed_all(seed=1)
 print(torch.cuda.is_available())
 print(torch.cuda.device_count())
 
-def start(feature_select, dimension_model, encoder_layers, batch_size, learning_rate, is_training, data_input, model, seed, i, loss_k=2, loss_type='MSE'):
+def start(feature_select, dimension_model, encoder_layers, batch_size, learning_rate, is_training, data_input, model, seed, i, loss_k=2, loss_type='MSE', domain_split='district'):
     """
     新增参数：
     loss_k: 自定义损失函数的惩罚系数k
@@ -35,6 +35,9 @@ def start(feature_select, dimension_model, encoder_layers, batch_size, learning_
     # 新增：损失函数相关参数
     parser.add_argument('--loss_k', type=float, required=False, default=loss_k, help='惩罚系数k for custom loss')
     parser.add_argument('--loss', type=str, required=False, default=loss_type, help='loss function: MSE/Custom')
+    # 新增：目标域源域划分策略
+    parser.add_argument('--domain_split', type=str, required=False, default=domain_split,
+                        help='域划分策略: district=按小区划分, channel=按渠道划分')
 
     # data loader
     parser.add_argument('--data', type=str, required=False, default='sale', help='dataset type')
@@ -100,7 +103,7 @@ def start(feature_select, dimension_model, encoder_layers, batch_size, learning_
     # optimization
     parser.add_argument('--num_workers', type=int, default=0, help='data loader num workers')
     parser.add_argument('--itr', type=int, default=1, help='experiments times')
-    parser.add_argument('--train_epochs', type=int, default=20, help='train epochs')
+    parser.add_argument('--train_epochs', type=int, default=100, help='train epochs')
     parser.add_argument('--batch_size', type=int, default=batch_size, help='batch size of train input data')
     parser.add_argument('--patience', type=int, default=3, help='early stopping patience')
     parser.add_argument('--learning_rate', type=float, default=learning_rate, help='optimizer learning rate')
@@ -280,13 +283,14 @@ if __name__ == '__main__':
         feature_select='time_trends_slide',
         dimension_model=128,
         encoder_layers=2,
-        batch_size=16,
-        learning_rate=0.001,
+        batch_size=4,
+        learning_rate=0.00005,
         data_input='/Users/inaya/Desktop/HierSales/data/deep_train_202305_with_store_info.csv',
         model='HierDA',
         seed=2021,
         i=202305,
         loss_k=2.0,
         loss_type='Custom',
-        is_training=1
+        is_training=0,
+        domain_split='channel'
     )
