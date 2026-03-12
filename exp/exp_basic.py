@@ -1,9 +1,6 @@
 import os
 import torch
 from models import (Autoformer, Transformer, TimesNet, Nonstationary_Transformer, FEDformer, HierDA)
-# , DLinear, , \
-#     Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, FiLM)
-
 
 class Exp_Basic(object):
     def __init__(self, args):
@@ -13,21 +10,12 @@ class Exp_Basic(object):
             'Autoformer': Autoformer,
             'Transformer': Transformer,
             'Nonstationary_Transformer': Nonstationary_Transformer,
-            # 'DLinear': DLinear,
             'FEDformer': FEDformer,
             'HierDA': HierDA,
-            # 'Informer': Informer,
-            # 'LightTS': LightTS,
-            # 'Reformer': Reformer,
-            # 'ETSformer': ETSformer,
-            # 'PatchTST': PatchTST,
-            # 'Pyraformer': Pyraformer,
-            # 'MICN': MICN,
-            # 'Crossformer': Crossformer,
-            # 'FiLM': FiLM,
         }
         self.device = self._acquire_device()
-        self.model = self._build_model().cuda()
+        # self.model = self._build_model().cuda()
+        self.model = self._build_model().to(self.device)
             # to(self.device)
 
     def _build_model(self):

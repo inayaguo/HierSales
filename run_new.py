@@ -10,7 +10,6 @@ torch.cuda.manual_seed_all(seed=1)
 print(torch.cuda.is_available())
 print(torch.cuda.device_count())
 
-
 def start(feature_select, dimension_model, encoder_layers, batch_size, learning_rate, data_input, model, seed, i,
           loss_k=2, loss_type='MSE'):
     """
@@ -284,7 +283,7 @@ if __name__ == '__main__':
         encoder_layers=2,
         batch_size=16,
         learning_rate=0.001,
-        data_input='deep_train_202305.csv',
+        data_input='/Users/inaya/Desktop/HierSales/data/deep_train_202305_with_store_info.csv',
         model='HierDA',
         seed=2021,
         i=202305,
