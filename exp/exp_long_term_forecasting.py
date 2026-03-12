@@ -61,7 +61,9 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         preds, trues = [], []
         self.model.eval()
         with torch.no_grad():
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
+            # for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(
+                    vali_loader):
                 # batch_x = batch_x.float().cuda()
                 # batch_y = batch_y.float().cuda()
                 # batch_x_mark = batch_x_mark.float().cuda()
@@ -80,14 +82,18 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
                         else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
                 else:
                     if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
                     else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
@@ -99,10 +105,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 preds.append(pred.numpy())
                 trues.append(true.numpy())
 
-        preds = np.array(preds)
-        trues = np.array(trues)
-        preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
-        trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+        # preds = np.array(preds)
+        # trues = np.array(trues)
+        # preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
+        # trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+        preds = np.concatenate(preds, axis=0)
+        trues = np.concatenate(trues, axis=0)
 
         print('test shape:', preds.shape)
         print('true shape:', trues.shape)
@@ -188,7 +196,9 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
             self.model.train()
             epoch_time = time.time()
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
+            # for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(
+                        train_loader):
                 iter_count += 1
                 model_optim.zero_grad()
                 # batch_x = batch_x.float().cuda()
@@ -209,9 +219,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
                         else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
 
                         f_dim = -1 if self.args.features == 'MS' else 0
                         outputs = outputs[:, -self.args.pred_len:, f_dim:]
@@ -223,9 +235,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         train_loss.append(loss.item())
                 else:
                     if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
                     else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
 
                     f_dim = -1 if self.args.features == 'MS' else 0
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
@@ -309,7 +323,9 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         self.model.eval()
         with torch.no_grad():
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
+            # for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(
+                        test_loader):
                 # batch_x = batch_x.float().cuda()
                 # batch_y = batch_y.float().cuda()
                 # batch_x_mark = batch_x_mark.float().cuda()
@@ -328,15 +344,18 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
                         else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                            # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                            outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
                 else:
                     if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)[0]
                     else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-
+                        # outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 # batch_y = batch_y[:, -self.args.pred_len:, f_dim:].cuda()
@@ -349,12 +368,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 preds.append(pred)
                 trues.append(true)
 
-        preds = np.array(preds)
-        trues = np.array(trues)
-        print('test shape:', preds.shape)
-        print('true shape:', trues.shape)
-        preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
-        trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+        # preds = np.array(preds)
+        # trues = np.array(trues)
+        preds = np.concatenate(preds, axis=0)
+        trues = np.concatenate(trues, axis=0)
+        # print('test shape:', preds.shape)
+        # print('true shape:', trues.shape)
+        # preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
+        # trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         self.cal_acc(preds, trues)
         return
 

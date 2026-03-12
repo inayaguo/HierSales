@@ -207,7 +207,8 @@ class Model(nn.Module):
         # 模块4：域分类器
         self.domain_classifier = DomainClassifier(feat_dim=feat_dim).to(device)
 
-    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
+    # def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
+    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, x_target=None):
         """
         标准encoder-decoder接口，兼容训练循环调用方式。
         x_enc:      (batch, seq_len, input_dim)  — 编码器输入（源域）
@@ -216,11 +217,17 @@ class Model(nn.Module):
         x_mark_dec: (batch, label_len+pred_len, time_dim)  — 解码器时间特征（暂不使用）
         """
         # 将解码器输入中的预测部分作为目标域数据
-        # x_dec前label_len步为已知，后pred_len步为待预测（已被置零）
-        source_data = x_enc  # (batch, seq_len, input_dim)
-        target_data = x_dec[:, :self.label_len, :]  # (batch, label_len, input_dim) 用已知的label部分
+        # # x_dec前label_len步为已知，后pred_len步为待预测（已被置零）
+        # source_data = x_enc  # (batch, seq_len, input_dim)
+        # target_data = x_dec[:, :self.label_len, :]  # (batch, label_len, input_dim) 用已知的label部分
+        #
+        # # 自动生成mask（全0，表示无缺失；如有真实缺失逻辑可替换）
+        # source_mask = torch.zeros_like(source_data)
+        # target_mask = torch.zeros_like(target_data)
+        source_data = x_enc
+        # 优先使用显式传入的目标域数据，否则退化为用label部分
+        target_data = x_target if x_target is not None else x_dec[:, :self.label_len, :]
 
-        # 自动生成mask（全0，表示无缺失；如有真实缺失逻辑可替换）
         source_mask = torch.zeros_like(source_data)
         target_mask = torch.zeros_like(target_data)
 
