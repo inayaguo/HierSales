@@ -13,30 +13,30 @@ warnings.filterwarnings('ignore')
 
 
 def select_train_test(df):
-        all_groups = []
+    all_groups = []
 
-        grouped = df.groupby(['name', 'start'])
+    grouped = df.groupby(['name', 'start'])
 
-        for name_start, group in grouped:
-                if len(group) < 13:  # 如果组内数据不足 13 行，则跳过
-                    continue
-                
-                # 计算前 12 行的均值
-                mean_value = group.iloc[:12]['predict'].mean()  # 假设 'value' 是需要计算的列
-                # 取第 13 行的值
-                thirteenth_value = group.iloc[12]['predict']
-                
-                # 计算差异率
-                if mean_value != 0:  # 避免除以零的情况
-                    difference_rate = abs(thirteenth_value - mean_value) / mean_value
-                    
-                    # 如果差异率小于等于 10%，则保留该组
-                    if difference_rate <= 0.30:
-                        all_groups.append(group)
+    for name_start, group in grouped:
+        if len(group) < 13:  # 如果组内数据不足 13 行，则跳过
+            continue
 
-        result_df = pd.concat(all_groups, ignore_index=True)
+        # 计算前 12 行的均值
+        mean_value = group.iloc[:12]['predict'].mean()  # 假设 'value' 是需要计算的列
+        # 取第 13 行的值
+        thirteenth_value = group.iloc[12]['predict']
 
-        return result_df
+        # 计算差异率
+        if mean_value != 0:  # 避免除以零的情况
+            difference_rate = abs(thirteenth_value - mean_value) / mean_value
+
+            # 如果差异率小于等于 10%，则保留该组
+            if difference_rate <= 0.30:
+                all_groups.append(group)
+
+    result_df = pd.concat(all_groups, ignore_index=True)
+
+    return result_df
 
 
 # 销量预测_HierSales
@@ -76,18 +76,21 @@ class Sale_Prediction(Dataset):
         print('after', df_raw.shape)
         df_raw = df_raw.fillna(100)
 
+        # ===================== 读取实验模式 =====================
+        # experiment_mode 支持三种值：
+        #   'hierda'      — 原有逻辑：源域 + 目标域，有域适应（默认）
+        #   'target_only' — 仅目标域训练集训练，预测目标域测试集
+        #   'source_only' — 仅源域数据训练，直接预测目标域测试集
+        experiment_mode = getattr(self.args, 'experiment_mode', 'hierda')
+
         # ===================== 按参数选择域划分策略 =====================
         domain_split = getattr(self.args, 'domain_split', 'district')  # 默认按小区划分
 
         # 美赞
         if domain_split == 'district':
-            # 按小区门店数量排名，后20%的小区归目标域，其余归源域
-            community_col = '区域'  # 若有独立小区列（如'community'），改为对应列名
+            community_col = '区域'
 
-            # 统计每个小区的门店数量并排序
             community_store_counts = df_raw.groupby(community_col)['name'].nunique().sort_values()
-
-            # 后20%分位数作为阈值
             threshold_20pct = community_store_counts.quantile(0.6)
 
             target_communities = community_store_counts[
@@ -107,42 +110,9 @@ class Sale_Prediction(Dataset):
             df_target = df_raw[df_raw[community_col].isin(target_communities)].copy()
             df_source = df_raw[df_raw[community_col].isin(source_communities)].copy()
 
-        # 金佰利
-        # if domain_split == 'district':
-        #     # 按小区门店数量排名，后20%的小区归目标域，其余归源域
-        #     community_col = '小区'  # 若有独立小区列（如'community'），改为对应列名
-        #
-        #     # 统计每个小区的门店数量并排序
-        #     community_store_counts = df_raw.groupby(community_col)['name'].nunique().sort_values()
-        #
-        #     # 后20%分位数作为阈值
-        #     threshold_20pct = community_store_counts.quantile(0.6)
-        #
-        #     target_communities = community_store_counts[
-        #         community_store_counts <= threshold_20pct
-        #         ].index.tolist()
-        #     source_communities = community_store_counts[
-        #         community_store_counts > threshold_20pct
-        #         ].index.tolist()
-        #
-        #     print(f'小区门店数分布：\n{community_store_counts}')
-        #     print(f'后20%门店数阈值：{threshold_20pct}')
-        #     print(f'目标域小区数：{len(target_communities)}，'
-        #           f'涉及门店：{community_store_counts[target_communities].sum()}家')
-        #     print(f'源域小区数：{len(source_communities)}，'
-        #           f'涉及门店：{community_store_counts[source_communities].sum()}家')
-        #
-        #     df_target = df_raw[df_raw[community_col].isin(target_communities)].copy()
-        #     df_source = df_raw[df_raw[community_col].isin(source_communities)].copy()
-
-        # 美赞
         elif domain_split == 'channel':
-            # ---- 按渠道划分 ----
-            # 按渠道门店数量排名，后20%的渠道归目标域，其余归源域
             if '品牌渠道' in df_raw.columns:
                 channel_store_counts = df_raw.groupby('品牌渠道')['name'].nunique().sort_values()
-
-                # 后20%分位数作为阈值
                 threshold_20pct = channel_store_counts.quantile(0.6)
 
                 target_channels = channel_store_counts[
@@ -152,7 +122,6 @@ class Sale_Prediction(Dataset):
                     channel_store_counts > threshold_20pct
                     ].index.tolist()
 
-                # 兜底：若所有渠道门店数相同导致目标域为空，取门店数最少的渠道
                 if len(target_channels) == 0:
                     target_channels = [channel_store_counts.index[0]]
                     source_channels = channel_store_counts.index[1:].tolist()
@@ -176,13 +145,32 @@ class Sale_Prediction(Dataset):
             raise ValueError(f'未知的域划分策略：{domain_split}，请选择 district 或 channel')
 
         # 金佰利
+        # if domain_split == 'district':
+        #     community_col = '小区'
+        #
+        #     community_store_counts = df_raw.groupby(community_col)['name'].nunique().sort_values()
+        #     threshold_20pct = community_store_counts.quantile(0.6)
+        #
+        #     target_communities = community_store_counts[
+        #         community_store_counts <= threshold_20pct
+        #         ].index.tolist()
+        #     source_communities = community_store_counts[
+        #         community_store_counts > threshold_20pct
+        #         ].index.tolist()
+        #
+        #     print(f'小区门店数分布：\n{community_store_counts}')
+        #     print(f'后20%门店数阈值：{threshold_20pct}')
+        #     print(f'目标域小区数：{len(target_communities)}，'
+        #           f'涉及门店：{community_store_counts[target_communities].sum()}家')
+        #     print(f'源域小区数：{len(source_communities)}，'
+        #           f'涉及门店：{community_store_counts[source_communities].sum()}家')
+        #
+        #     df_target = df_raw[df_raw[community_col].isin(target_communities)].copy()
+        #     df_source = df_raw[df_raw[community_col].isin(source_communities)].copy()
+        #
         # elif domain_split == 'channel':
-        #     # ---- 按渠道划分 ----
-        #     # 按渠道门店数量排名，后20%的渠道归目标域，其余归源域
         #     if '渠道' in df_raw.columns:
         #         channel_store_counts = df_raw.groupby('渠道')['name'].nunique().sort_values()
-        #
-        #         # 后20%分位数作为阈值
         #         threshold_20pct = channel_store_counts.quantile(0.6)
         #
         #         target_channels = channel_store_counts[
@@ -192,7 +180,6 @@ class Sale_Prediction(Dataset):
         #             channel_store_counts > threshold_20pct
         #             ].index.tolist()
         #
-        #         # 兜底：若所有渠道门店数相同导致目标域为空，取门店数最少的渠道
         #         if len(target_channels) == 0:
         #             target_channels = [channel_store_counts.index[0]]
         #             source_channels = channel_store_counts.index[1:].tolist()
@@ -231,7 +218,7 @@ class Sale_Prediction(Dataset):
         if 'trends' in self.features:
             final_columns += trends_columns
 
-        # ===================== 目标域：按原有逻辑划分训练集/测试集 =====================
+        # ===================== 目标域时间划分（三种模式共用） =====================
         df_target = df_target[final_columns + group_columns + stamp_columns]
         month_value = sorted(df_target['start'].unique())
         train_months = month_value[:-1]
@@ -239,38 +226,84 @@ class Sale_Prediction(Dataset):
         df_target_train = df_target[df_target['start'].isin(train_months)]
         df_target_test = df_target[df_target['start'] == test_month]
 
-        # 当前flag对应的目标域数据
-        # val复用test逻辑（与原代码一致）
-        if self.set_type == 0:
-            df_target_current = df_target_train
-        else:
-            df_target_current = df_target_test
-
-        # ===================== 源域：时间范围与目标域训练集保持一致 =====================
-        if len(df_source) > 0:
-            df_source = df_source[final_columns + group_columns + stamp_columns]
-            df_source_aligned = df_source[df_source['start'].isin(train_months)]
-        else:
-            df_source_aligned = pd.DataFrame(columns=df_target_current.columns)
-
         stamp_length = 2 if self.timeenc == 0 else 1
 
-        # ===================== 构建目标域样本 =====================
-        self.data, self.data_stamp = self._build_samples(
-            df_target_current, final_columns, stamp_columns, stamp_length
-        )
+        # ===================== 根据 experiment_mode 决定训练/测试数据来源 =====================
 
-        # ===================== 构建源域样本（训练和val/test均使用train_months范围的源域） =====================
-        if len(df_source_aligned) > 0:
-            self.source_data, self.source_stamp = self._build_samples(
-                df_source_aligned, final_columns, stamp_columns, stamp_length
+        if experiment_mode == 'target_only':
+            # ── Target-Only：仅用目标域训练集训练，预测目标域测试集 ──────────────
+            # 训练阶段：目标域训练集
+            # 测试/val阶段：目标域测试集
+            # source_data 退化为与 data 相同（模型仍需接收源域输入，直接复用目标域数据）
+            print(f'[experiment_mode=target_only] 仅使用目标域数据，无域适应')
+
+            if self.set_type == 0:  # train
+                df_current = df_target_train
+            else:  # val / test
+                df_current = df_target_test
+
+            self.data, self.data_stamp = self._build_samples(
+                df_current, final_columns, stamp_columns, stamp_length
             )
-        else:
-            # 无源域时，用目标域数据代替（退化为无域适应）
+            # source 复用 target（模型接口不变，但实际无跨域信息）
             self.source_data = self.data.copy()
             self.source_stamp = self.data_stamp.copy()
 
-        print(f'目标域样本数：{len(self.data)}，源域样本数：{len(self.source_data)}')
+        elif experiment_mode == 'source_only':
+            # ── Source-Only：仅用源域训练集训练，预测目标域测试集 ────────────────
+            # 训练阶段：源域（train_months 范围）
+            # 测试/val阶段：目标域测试集（评估跨域泛化能力）
+            # source_data 在训练时 = 源域，测试时复用 target 数据（只需前向一次）
+            print(f'[experiment_mode=source_only] 仅使用源域数据训练，直接预测目标域测试集')
+
+            if len(df_source) > 0:
+                df_source = df_source[final_columns + group_columns + stamp_columns]
+                df_source_train = df_source[df_source['start'].isin(train_months)]
+            else:
+                df_source_train = pd.DataFrame(columns=df_target_train.columns)
+
+            if self.set_type == 0:  # train：用源域训练集
+                if len(df_source_train) > 0:
+                    df_current = df_source_train
+                else:
+                    print('警告：源域训练集为空，退化为目标域训练集')
+                    df_current = df_target_train
+            else:  # val / test：评估在目标域测试集上的效果
+                df_current = df_target_test
+
+            self.data, self.data_stamp = self._build_samples(
+                df_current, final_columns, stamp_columns, stamp_length
+            )
+            # source 复用 target（接口对齐，source_only 下无需额外源域输入）
+            self.source_data = self.data.copy()
+            self.source_stamp = self.data_stamp.copy()
+
+        else:
+            # ── HierDA（原有逻辑）：源域 + 目标域，有域适应 ──────────────────────
+            if self.set_type == 0:
+                df_target_current = df_target_train
+            else:
+                df_target_current = df_target_test
+
+            if len(df_source) > 0:
+                df_source = df_source[final_columns + group_columns + stamp_columns]
+                df_source_aligned = df_source[df_source['start'].isin(train_months)]
+            else:
+                df_source_aligned = pd.DataFrame(columns=df_target_current.columns)
+
+            self.data, self.data_stamp = self._build_samples(
+                df_target_current, final_columns, stamp_columns, stamp_length
+            )
+
+            if len(df_source_aligned) > 0:
+                self.source_data, self.source_stamp = self._build_samples(
+                    df_source_aligned, final_columns, stamp_columns, stamp_length
+                )
+            else:
+                self.source_data = self.data.copy()
+                self.source_stamp = self.data_stamp.copy()
+
+        print(f'[{experiment_mode}] 目标域样本数：{len(self.data)}，源域样本数：{len(self.source_data)}')
 
     def _build_samples(self, df, final_columns, stamp_columns, stamp_length):
         """将分组后的DataFrame构建为numpy数组样本"""
@@ -278,8 +311,6 @@ class Sale_Prediction(Dataset):
         group_len = len(grouped)
         data_selected = np.empty((group_len, self.seq_len + self.pred_len, len(final_columns)), dtype=np.float32)
         data_stamp = np.empty((group_len, self.seq_len + self.pred_len, stamp_length), dtype=np.float32)
-        # data_selected = np.empty((group_len, self.seq_len + self.pred_len, len(final_columns)))
-        # data_stamp = np.empty((group_len, self.seq_len + self.pred_len, stamp_length))
 
         valid_count = 0
         for index, group_pack in enumerate(grouped):
@@ -291,8 +322,10 @@ class Sale_Prediction(Dataset):
             group_stamp = group[stamp_columns].copy()
             group_stamp['date'] = group_stamp['month']
             if self.timeenc == 0:
-                group_stamp['month_feat'] = group_stamp['date'].apply(lambda row: row if not hasattr(row, 'month') else row.month)
-                group_stamp['year_feat'] = group_stamp['date'].apply(lambda row: row if not hasattr(row, 'year') else row.year)
+                group_stamp['month_feat'] = group_stamp['date'].apply(
+                    lambda row: row if not hasattr(row, 'month') else row.month)
+                group_stamp['year_feat'] = group_stamp['date'].apply(
+                    lambda row: row if not hasattr(row, 'year') else row.year)
                 group_stamp = group_stamp[['month_feat', 'year_feat']].values
                 data_stamp[valid_count] = group_stamp
             else:

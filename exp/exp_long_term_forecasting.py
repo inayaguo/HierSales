@@ -13,22 +13,22 @@ from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
 from utils.metrics import metric
 from utils.tools import EarlyStopping, adjust_learning_rate, visual
-from models.HierDA import Model as HierDA
 
 warnings.filterwarnings('ignore')
 
 # ── 结果写入工具（与 run_batch.py 共享同一个 CSV） ──────────────────────────
 RESULT_DIR = os.path.join("output_hiersales", "result")
 # 美赞
-RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz.csv")
+RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_all_exp.csv")
 # 金佰利
-# RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results.csv")
+# RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_result_all_exp.csv")
 
 RESULT_COLUMNS = [
     "run_time",
     "model",
     "month",
     "domain_split",
+    "experiment_mode",   # ← 新增：hierda / target_only / source_only
     "feature_select",
     "d_model",
     "e_layers",
@@ -103,12 +103,15 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         total_loss = []
         preds, trues = [], []
         self.model.eval()
+        # eval 模式下清除上一步训练遗留的 extra_loss，避免影响 vali loss 计算
+        if hasattr(self.model, 'extra_loss'):
+            self.model.extra_loss = None
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark, batch_x_src, batch_x_src_mark) in enumerate(vali_loader):
-                batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float().to(self.device)
-                batch_x_mark = batch_x_mark.float().to(self.device)
-                batch_y_mark = batch_y_mark.float().to(self.device)
+                batch_x       = batch_x.float().to(self.device)
+                batch_y       = batch_y.float().to(self.device)
+                batch_x_mark  = batch_x_mark.float().to(self.device)
+                batch_y_mark  = batch_y_mark.float().to(self.device)
 
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
@@ -119,12 +122,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 else:
                     outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
 
-                f_dim = -1 if self.args.features == 'MS' else 0
+                f_dim   = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                pred = outputs.detach().cpu()
-                true = batch_y.detach().cpu()
-                loss = criterion(pred, true)
+                pred    = outputs.detach().cpu()
+                true    = batch_y.detach().cpu()
+                loss    = criterion(pred, true)
                 total_loss.append(loss)
                 preds.append(pred.numpy())
                 trues.append(true.numpy())
@@ -132,7 +135,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
         print('vali shape:', preds.shape, trues.shape)
-        self.cal_acc(preds, trues, phase="val")
+        self.cal_acc(preds, trues, phase="val", write_csv=False)
         total_loss = np.average(total_loss)
         self.model.train()
         return total_loss
@@ -163,7 +166,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         for epoch in range(self.args.train_epochs):
             iter_count = 0
-            train_loss = []
+            train_loss       = []
+            extra_loss_accum = []   # 每 epoch 汇总 extra_loss，末尾打印一次
 
             self.model.train()
             epoch_time = time.time()
@@ -172,8 +176,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 iter_count += 1
                 model_optim.zero_grad()
 
-                batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float().to(self.device)
+                batch_x      = batch_x.float().to(self.device)
+                batch_y      = batch_y.float().to(self.device)
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
 
@@ -183,46 +187,31 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
-                        print(f'outputs[:,0,0] 前5个值: {outputs[:, 0, 0][:5].detach().cpu().numpy()}')
-                        print(f'batch_y[:,0,0] 前5个值: {batch_y[:, 0, 0][:5].detach().cpu().numpy()}')
-                        print(f'batch_x_src has nan: {torch.isnan(batch_x_src).any()}')
-                        print(f'batch_x has nan: {torch.isnan(batch_x).any()}')
-                        print(f'outputs has nan: {torch.isnan(outputs).any()}')
-                        print(f'batch_y has nan: {torch.isnan(batch_y).any()}')
-
-                        f_dim = -1 if self.args.features == 'MS' else 0
+                        f_dim   = -1 if self.args.features == 'MS' else 0
                         outputs = outputs[:, -self.args.pred_len:, f_dim:]
                         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                        loss = criterion(outputs, batch_y)
-                        if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
-                            print(f'main_loss={loss.item():.4f}, extra_loss={self.model.extra_loss.item():.4f}')
+                        loss    = criterion(outputs, batch_y)
+                        if hasattr(self.model, 'extra_loss') and self.model.extra_loss is not None:
+                            extra_loss_accum.append(self.model.extra_loss.item())
                             loss = loss + self.model.extra_loss
-                        train_loss.append(loss.item())
                 else:
                     outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
-                    print(f'outputs[:,0,0] 前5个值: {outputs[:, 0, 0][:5].detach().cpu().numpy()}')
-                    print(f'batch_y[:,0,0] 前5个值: {batch_y[:, 0, 0][:5].detach().cpu().numpy()}')
-                    print(f'batch_x_src has nan: {torch.isnan(batch_x_src).any()}')
-                    print(f'batch_x has nan: {torch.isnan(batch_x).any()}')
-                    print(f'outputs has nan: {torch.isnan(outputs).any()}')
-                    print(f'batch_y has nan: {torch.isnan(batch_y).any()}')
-
-                    f_dim = -1 if self.args.features == 'MS' else 0
+                    f_dim   = -1 if self.args.features == 'MS' else 0
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
                     batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                    loss = criterion(outputs, batch_y)
-                    if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
-                        print(f'main_loss={loss.item():.4f}, extra_loss={self.model.extra_loss.item():.4f}')
+                    loss    = criterion(outputs, batch_y)
+                    if hasattr(self.model, 'extra_loss') and self.model.extra_loss is not None:
+                        extra_loss_accum.append(self.model.extra_loss.item())
                         loss = loss + self.model.extra_loss
-                    train_loss.append(loss.item())
+                train_loss.append(loss.item())
 
                 if (i + 1) % 10 == 0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
-                    speed = (time.time() - time_now) / iter_count
+                    speed     = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
                     print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
                     iter_count = 0
-                    time_now = time.time()
+                    time_now   = time.time()
 
                 if self.args.use_amp:
                     scaler.scale(loss).backward()
@@ -233,8 +222,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     model_optim.step()
 
-            print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
+            print("Epoch: {} cost time: {:.2f}s".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
+            # extra_loss 汇总：每 epoch 打印一次均值，不刷屏
+            if extra_loss_accum:
+                print("  [{model}] avg extra_loss this epoch: {el:.6f}".format(
+                    model=self.args.model,
+                    el=float(np.mean(extra_loss_accum))
+                ))
             vali_loss = self.vali(vali_data, vali_loader, criterion)
 
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f}".format(
@@ -257,10 +252,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return self.model
 
     def test(self, setting, test=0, return_metrics=False):
-        """
-        test: 1 = 从磁盘加载 checkpoint 再推理；0 = 直接用当前模型权重推理
-        return_metrics: True 时返回指标 dict（供 run_batch.py 收集结果）
-        """
         test_data, test_loader = self._get_data(flag='test')
         if test:
             print('loading model')
@@ -302,7 +293,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
 
-        # cal_acc 现在返回指标 dict
         metrics = self.cal_acc(preds, trues, phase="test", write_csv=True)
 
         if return_metrics:
@@ -313,12 +303,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
     # cal_acc：计算指标，写入 CSV，并返回 dict
     # ────────────────────────────────────────────────────────────────────
     def cal_acc(self, preds, trues, phase="test", write_csv=True):
-        """
-        计算评估指标，可选写入结果 CSV。
-
-        返回：
-            dict，包含 mae / mse / rmse / mape / mspe / store_acc
-        """
         preds = preds[:, :, 0]
         trues = trues[:, :, 0]
 
@@ -329,7 +313,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         filtered_trues = trues_flat[valid_indices]
         filtered_preds = preds_flat[valid_indices]
 
-        # 保存预测明细 CSV
         df = pd.DataFrame({
             'true':    filtered_trues,
             'predict': filtered_preds,
@@ -348,14 +331,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 result_flags.append(0)
         store_acc = sum(result_flags) / len(result_flags) if result_flags else 0
 
-        print(f'===== Loss k={self.loss_k} | phase={phase} =====')
+        print(f'===== [{self.args.model}] Loss k={self.loss_k} | phase={phase} =====')
         print(f'mse:{mse:.4f}, mae:{mae:.4f}, mape:{mape:.4f}, store_acc:{store_acc:.4f}')
         print(
             f'batch_size:{self.args.batch_size}, encoder_layers:{self.args.e_layers}, '
             f'lr:{self.args.learning_rate}, d_model:{self.args.d_model}'
         )
 
-        # ── 构造超参数行 ──────────────────────────────────────────────────
         metrics_dict = dict(
             mae       = round(float(mae),       4),
             mse       = round(float(mse),       4),
@@ -366,26 +348,25 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         )
 
         hyper_dict = dict(
-            model         = self.args.model,
-            month         = getattr(self.args, 'month_predict', ''),
-            domain_split  = getattr(self.args, 'domain_split',  'district'),
-            feature_select= getattr(self.args, 'features',      ''),
-            d_model       = self.args.d_model,
-            e_layers      = self.args.e_layers,
-            batch_size    = self.args.batch_size,
-            learning_rate = self.args.learning_rate,
-            loss_type     = getattr(self.args, 'loss',    'Custom'),
-            loss_k        = self.loss_k,
-            seq_len       = self.args.seq_len,
-            label_len     = self.args.label_len,
-            pred_len      = self.args.pred_len,
-            seed          = getattr(self.args, 'set_seed', ''),
-            phase         = phase,
+            model           = self.args.model,
+            month           = getattr(self.args, 'month_predict',    ''),
+            domain_split    = getattr(self.args, 'domain_split',     'district'),
+            experiment_mode = getattr(self.args, 'experiment_mode',  'hierda'),  # ← 新增
+            feature_select  = getattr(self.args, 'features',         ''),
+            d_model         = self.args.d_model,
+            e_layers        = self.args.e_layers,
+            batch_size      = self.args.batch_size,
+            learning_rate   = self.args.learning_rate,
+            loss_type       = getattr(self.args, 'loss',    'Custom'),
+            loss_k          = self.loss_k,
+            seq_len         = self.args.seq_len,
+            label_len       = self.args.label_len,
+            pred_len        = self.args.pred_len,
+            seed            = getattr(self.args, 'set_seed', ''),
+            phase           = phase,
         )
 
-        # ── 写入汇总 CSV ──────────────────────────────────────────────────
         if write_csv and os.path.exists("output_hiersales"):
-            # 同时保留原来 per-experiment 的小 CSV
             result_dir  = os.path.join("output_hiersales", "result")
             os.makedirs(result_dir, exist_ok=True)
             old_result_path = os.path.join(result_dir, "k_value_experiment.csv")
@@ -401,7 +382,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             with open(old_result_path, 'a', encoding='utf-8') as f:
                 f.write(old_data_row)
 
-            # 写入新的汇总 CSV（含全量超参数）
             _write_result_row({**hyper_dict, **metrics_dict})
             print(f"📄 指标已写入：{RESULT_CSV}")
         else:

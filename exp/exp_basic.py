@@ -1,17 +1,20 @@
 import os
 import torch
-from models import (Autoformer, Transformer, TimesNet, Nonstationary_Transformer, FEDformer, HierDA)
+from models import (HierDA, ACON, AdaMatch, AdvSKM, CoDATS, CotMIX, DANN, DeepCoral, RAINCOAT)
 
 class Exp_Basic(object):
     def __init__(self, args):
         self.args = args
         self.model_dict = {
-            'TimesNet': TimesNet,
-            'Autoformer': Autoformer,
-            'Transformer': Transformer,
-            'Nonstationary_Transformer': Nonstationary_Transformer,
-            'FEDformer': FEDformer,
             'HierDA': HierDA,
+            'ACON': ACON,
+            'AdaMatch': AdaMatch,
+            'AdvSKM': AdvSKM,
+            'CoDATS': CoDATS,
+            'CotMIX': CotMIX,
+            'DANN': DANN,
+            'DeepCoral': DeepCoral,
+            'RAINCOAT': RAINCOAT
         }
         self.device = self._acquire_device()
         # self.model = self._build_model().cuda()

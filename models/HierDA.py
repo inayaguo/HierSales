@@ -433,30 +433,3 @@ class Model(nn.Module):
         )
         pred = torch.cat([pred_value.unsqueeze(-1), padding], dim=-1)
         return pred
-
-# # ===================== 6. 测试代码（验证框架流程） =====================
-# if __name__ == "__main__":
-#     # 设备选择（适配之前的CUDA问题）
-#     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-#     # 模拟输入：batch=8, seq_len=10, input_dim=5（销售数据维度）
-#     batch_size = 8
-#     seq_len = 10
-#     input_dim = 5
-#     # 源域/目标域数据 + 缺失掩码（1=缺失，0=存在）
-#     source_data = torch.randn(batch_size, seq_len, input_dim).to(device)
-#     source_mask = torch.randint(0, 2, (batch_size, seq_len, input_dim)).to(device)  # 随机缺失
-#     target_data = torch.randn(batch_size, seq_len, input_dim).to(device)
-#     target_mask = torch.randint(0, 2, (batch_size, seq_len, input_dim)).to(device)
-#     target_label = torch.randn(batch_size).to(device)  # 销售预测标签
-#
-#     # 初始化模型（传入seq_len和input_dim）
-#     model = HierDA(seq_len=seq_len, input_dim=input_dim, granularity_levels=3, device=device)
-#     # 前向传播
-#     outputs = model(source_data, source_mask, target_data, target_mask, target_label)
-#
-#     # 打印损失值，验证流程正常
-#     print("Total Loss:", outputs['total_loss'].item())
-#     print("Loss F (特征对齐):", outputs['loss_f'].item())
-#     print("Loss P (销售预测):", outputs['loss_p'].item())
-#     print("Loss C (域分类):", outputs['loss_c'].item())
-#     print("Sales Prediction Shape:", outputs['sales_pred'].shape)
