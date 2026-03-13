@@ -7,6 +7,7 @@ import torch.nn as nn
 import warnings
 from torch import optim
 import pandas as pd
+from datetime import datetime
 
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
@@ -15,6 +16,47 @@ from utils.tools import EarlyStopping, adjust_learning_rate, visual
 from models.HierDA import Model as HierDA
 
 warnings.filterwarnings('ignore')
+
+# ── 结果写入工具（与 run_batch.py 共享同一个 CSV） ──────────────────────────
+RESULT_DIR = os.path.join("output_hiersales", "result")
+# 美赞
+RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz.csv")
+# 金佰利
+# RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results.csv")
+
+RESULT_COLUMNS = [
+    "run_time",
+    "model",
+    "month",
+    "domain_split",
+    "feature_select",
+    "d_model",
+    "e_layers",
+    "batch_size",
+    "learning_rate",
+    "loss_type",
+    "loss_k",
+    "seq_len",
+    "label_len",
+    "pred_len",
+    "seed",
+    "mae",
+    "mse",
+    "rmse",
+    "mape",
+    "mspe",
+    "store_acc",
+    "phase",
+]
+
+
+def _write_result_row(row: dict):
+    """将单行结果追加写入 CSV；若文件/目录不存在则自动创建。"""
+    os.makedirs(RESULT_DIR, exist_ok=True)
+    row.setdefault("run_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    df_new = pd.DataFrame([row]).reindex(columns=RESULT_COLUMNS)
+    write_header = not os.path.exists(RESULT_CSV)
+    df_new.to_csv(RESULT_CSV, mode="a", header=write_header, index=False)
 
 
 class Exp_Long_Term_Forecast(Exp_Basic):
@@ -33,16 +75,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return data_set, data_loader
 
     def _select_optimizer(self):
-        # 对 output_scale 单独设置更小的学习率
         output_scale_params = [p for n, p in self.model.named_parameters() if 'output_scale' in n]
         other_params = [p for n, p in self.model.named_parameters() if 'output_scale' not in n]
-
         model_optim = optim.Adam([
             {'params': other_params, 'lr': self.args.learning_rate},
             {'params': output_scale_params, 'lr': self.args.learning_rate * 0.1}
         ])
         return model_optim
-        # return optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
 
     def _select_criterion(self):
         return self.log_reg_obj
@@ -93,7 +132,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
         print('vali shape:', preds.shape, trues.shape)
-        self.cal_acc(preds, trues)
+        self.cal_acc(preds, trues, phase="val")
         total_loss = np.average(total_loss)
         self.model.train()
         return total_loss
@@ -112,9 +151,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         time_now = time.time()
         train_steps = len(train_loader)
 
-        # ── 修复1：恢复 EarlyStopping，确保 checkpoint 被正确保存 ──
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
-
         model_optim = self._select_optimizer()
         if self.args.loss == 'Custom':
             criterion = self._select_criterion()
@@ -148,8 +185,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
                         print(f'outputs[:,0,0] 前5个值: {outputs[:, 0, 0][:5].detach().cpu().numpy()}')
                         print(f'batch_y[:,0,0] 前5个值: {batch_y[:, 0, 0][:5].detach().cpu().numpy()}')
-
-                        # 加这几行排查
                         print(f'batch_x_src has nan: {torch.isnan(batch_x_src).any()}')
                         print(f'batch_x has nan: {torch.isnan(batch_x).any()}')
                         print(f'outputs has nan: {torch.isnan(outputs).any()}')
@@ -160,18 +195,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                         loss = criterion(outputs, batch_y)
                         if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
-                            # 新增：打印各损失分项
                             print(f'main_loss={loss.item():.4f}, extra_loss={self.model.extra_loss.item():.4f}')
                             loss = loss + self.model.extra_loss
-                        # if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
-                        #     loss = loss + self.model.extra_loss
                         train_loss.append(loss.item())
                 else:
                     outputs = self.model(batch_x_src, batch_x_src_mark, dec_inp, batch_y_mark, batch_x)
                     print(f'outputs[:,0,0] 前5个值: {outputs[:, 0, 0][:5].detach().cpu().numpy()}')
                     print(f'batch_y[:,0,0] 前5个值: {batch_y[:, 0, 0][:5].detach().cpu().numpy()}')
-
-                    # 加这几行排查
                     print(f'batch_x_src has nan: {torch.isnan(batch_x_src).any()}')
                     print(f'batch_x has nan: {torch.isnan(batch_x).any()}')
                     print(f'outputs has nan: {torch.isnan(outputs).any()}')
@@ -182,11 +212,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                     loss = criterion(outputs, batch_y)
                     if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
-                        # 新增：打印各损失分项
                         print(f'main_loss={loss.item():.4f}, extra_loss={self.model.extra_loss.item():.4f}')
                         loss = loss + self.model.extra_loss
-                    # if hasattr(self.model, "extra_loss") and self.model.extra_loss is not None:
-                    #     loss = loss + self.model.extra_loss
                     train_loss.append(loss.item())
 
                 if (i + 1) % 10 == 0:
@@ -213,7 +240,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f}".format(
                 epoch + 1, train_steps, train_loss, vali_loss))
 
-            # ── 修复2：正确调用 early_stopping，保存 checkpoint ──
             early_stopping(vali_loss, self.model, path)
             if early_stopping.early_stop:
                 print("Early stopping")
@@ -221,7 +247,6 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
             adjust_learning_rate(model_optim, epoch + 1, self.args)
 
-        # ── 修复3：加载训练过程中保存的最优 checkpoint ──
         best_model_path = os.path.join(path, 'checkpoint.pth')
         if os.path.exists(best_model_path):
             self.model.load_state_dict(torch.load(best_model_path))
@@ -231,7 +256,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         return self.model
 
-    def test(self, setting, test=0):
+    def test(self, setting, test=0, return_metrics=False):
+        """
+        test: 1 = 从磁盘加载 checkpoint 再推理；0 = 直接用当前模型权重推理
+        return_metrics: True 时返回指标 dict（供 run_batch.py 收集结果）
+        """
         test_data, test_loader = self._get_data(flag='test')
         if test:
             print('loading model')
@@ -272,10 +301,24 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
-        self.cal_acc(preds, trues)
+
+        # cal_acc 现在返回指标 dict
+        metrics = self.cal_acc(preds, trues, phase="test", write_csv=True)
+
+        if return_metrics:
+            return metrics
         return
 
-    def cal_acc(self, preds, trues):
+    # ────────────────────────────────────────────────────────────────────
+    # cal_acc：计算指标，写入 CSV，并返回 dict
+    # ────────────────────────────────────────────────────────────────────
+    def cal_acc(self, preds, trues, phase="test", write_csv=True):
+        """
+        计算评估指标，可选写入结果 CSV。
+
+        返回：
+            dict，包含 mae / mse / rmse / mape / mspe / store_acc
+        """
         preds = preds[:, :, 0]
         trues = trues[:, :, 0]
 
@@ -286,41 +329,83 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         filtered_trues = trues_flat[valid_indices]
         filtered_preds = preds_flat[valid_indices]
 
+        # 保存预测明细 CSV
         df = pd.DataFrame({
-            'true': filtered_trues,
+            'true':    filtered_trues,
             'predict': filtered_preds,
-            'loss_k': [self.loss_k] * len(filtered_trues)
+            'loss_k':  [self.loss_k] * len(filtered_trues)
         })
         csv_name = f"{self.args.month_predict}_predict_k{self.loss_k}.csv"
         df.to_csv(csv_name, index=False)
 
         mae, mse, rmse, mape, mspe = metric(filtered_preds, filtered_trues)
-        result = []
+
+        result_flags = []
         for i in range(len(filtered_trues)):
             if filtered_trues[i] != 0 and abs(filtered_trues[i] - filtered_preds[i]) / filtered_trues[i] <= 0.2:
-                result.append(1)
+                result_flags.append(1)
             else:
-                result.append(0)
-        store_acc = sum(result) / len(result) if len(result) > 0 else 0
+                result_flags.append(0)
+        store_acc = sum(result_flags) / len(result_flags) if result_flags else 0
 
-        print(f'===== Loss k={self.loss_k} =====')
+        print(f'===== Loss k={self.loss_k} | phase={phase} =====')
         print(f'mse:{mse:.4f}, mae:{mae:.4f}, mape:{mape:.4f}, store_acc:{store_acc:.4f}')
-        print(f'batch_size:{self.args.batch_size}, encoder_layers:{self.args.e_layers}, lr:{self.args.learning_rate}, d_model:{self.args.d_model}')
+        print(
+            f'batch_size:{self.args.batch_size}, encoder_layers:{self.args.e_layers}, '
+            f'lr:{self.args.learning_rate}, d_model:{self.args.d_model}'
+        )
 
-        base_dir = "output_hiersales"
-        result_dir = os.path.join(base_dir, "result")
-        result_path = os.path.join(result_dir, "k_value_experiment.csv")
+        # ── 构造超参数行 ──────────────────────────────────────────────────
+        metrics_dict = dict(
+            mae       = round(float(mae),       4),
+            mse       = round(float(mse),       4),
+            rmse      = round(float(rmse),      4),
+            mape      = round(float(mape),      4),
+            mspe      = round(float(mspe),      4),
+            store_acc = round(float(store_acc), 4),
+        )
 
-        if os.path.exists(base_dir):
+        hyper_dict = dict(
+            model         = self.args.model,
+            month         = getattr(self.args, 'month_predict', ''),
+            domain_split  = getattr(self.args, 'domain_split',  'district'),
+            feature_select= getattr(self.args, 'features',      ''),
+            d_model       = self.args.d_model,
+            e_layers      = self.args.e_layers,
+            batch_size    = self.args.batch_size,
+            learning_rate = self.args.learning_rate,
+            loss_type     = getattr(self.args, 'loss',    'Custom'),
+            loss_k        = self.loss_k,
+            seq_len       = self.args.seq_len,
+            label_len     = self.args.label_len,
+            pred_len      = self.args.pred_len,
+            seed          = getattr(self.args, 'set_seed', ''),
+            phase         = phase,
+        )
+
+        # ── 写入汇总 CSV ──────────────────────────────────────────────────
+        if write_csv and os.path.exists("output_hiersales"):
+            # 同时保留原来 per-experiment 的小 CSV
+            result_dir  = os.path.join("output_hiersales", "result")
             os.makedirs(result_dir, exist_ok=True)
-            header = 'model,loss_k,month,d_model,encoder_layers,batch_size,learning_rate,mae,mse,rmse,mape,mspe,store_acc\n'
-            data_row = f'{self.args.model},{self.loss_k},{self.args.month_predict},{self.args.d_model},{self.args.e_layers},{self.args.batch_size},{self.args.learning_rate},{mae:.4f},{mse:.4f},{rmse:.4f},{mape:.4f},{mspe:.4f},{store_acc:.4f}\n'
-            if not os.path.exists(result_path):
-                with open(result_path, 'w', encoding='utf-8') as f:
-                    f.write(header)
-            with open(result_path, 'a', encoding='utf-8') as f:
-                f.write(data_row)
-        else:
-            print(f"基础目录 {base_dir} 不存在，无法写入文件")
+            old_result_path = os.path.join(result_dir, "k_value_experiment.csv")
+            old_header  = 'model,loss_k,month,d_model,encoder_layers,batch_size,learning_rate,mae,mse,rmse,mape,mspe,store_acc\n'
+            old_data_row = (
+                f'{self.args.model},{self.loss_k},{self.args.month_predict},'
+                f'{self.args.d_model},{self.args.e_layers},{self.args.batch_size},'
+                f'{self.args.learning_rate},{mae:.4f},{mse:.4f},{rmse:.4f},{mape:.4f},{mspe:.4f},{store_acc:.4f}\n'
+            )
+            if not os.path.exists(old_result_path):
+                with open(old_result_path, 'w', encoding='utf-8') as f:
+                    f.write(old_header)
+            with open(old_result_path, 'a', encoding='utf-8') as f:
+                f.write(old_data_row)
 
-        return
+            # 写入新的汇总 CSV（含全量超参数）
+            _write_result_row({**hyper_dict, **metrics_dict})
+            print(f"📄 指标已写入：{RESULT_CSV}")
+        else:
+            if not os.path.exists("output_hiersales"):
+                print(f"基础目录 output_hiersales 不存在，跳过文件写入")
+
+        return metrics_dict

@@ -79,9 +79,10 @@ class Sale_Prediction(Dataset):
         # ===================== 按参数选择域划分策略 =====================
         domain_split = getattr(self.args, 'domain_split', 'district')  # 默认按小区划分
 
+        # 美赞
         if domain_split == 'district':
             # 按小区门店数量排名，后20%的小区归目标域，其余归源域
-            community_col = '小区'  # 若有独立小区列（如'community'），改为对应列名
+            community_col = '区域'  # 若有独立小区列（如'community'），改为对应列名
 
             # 统计每个小区的门店数量并排序
             community_store_counts = df_raw.groupby(community_col)['name'].nunique().sort_values()
@@ -106,11 +107,40 @@ class Sale_Prediction(Dataset):
             df_target = df_raw[df_raw[community_col].isin(target_communities)].copy()
             df_source = df_raw[df_raw[community_col].isin(source_communities)].copy()
 
+        # 金佰利
+        # if domain_split == 'district':
+        #     # 按小区门店数量排名，后20%的小区归目标域，其余归源域
+        #     community_col = '小区'  # 若有独立小区列（如'community'），改为对应列名
+        #
+        #     # 统计每个小区的门店数量并排序
+        #     community_store_counts = df_raw.groupby(community_col)['name'].nunique().sort_values()
+        #
+        #     # 后20%分位数作为阈值
+        #     threshold_20pct = community_store_counts.quantile(0.6)
+        #
+        #     target_communities = community_store_counts[
+        #         community_store_counts <= threshold_20pct
+        #         ].index.tolist()
+        #     source_communities = community_store_counts[
+        #         community_store_counts > threshold_20pct
+        #         ].index.tolist()
+        #
+        #     print(f'小区门店数分布：\n{community_store_counts}')
+        #     print(f'后20%门店数阈值：{threshold_20pct}')
+        #     print(f'目标域小区数：{len(target_communities)}，'
+        #           f'涉及门店：{community_store_counts[target_communities].sum()}家')
+        #     print(f'源域小区数：{len(source_communities)}，'
+        #           f'涉及门店：{community_store_counts[source_communities].sum()}家')
+        #
+        #     df_target = df_raw[df_raw[community_col].isin(target_communities)].copy()
+        #     df_source = df_raw[df_raw[community_col].isin(source_communities)].copy()
+
+        # 美赞
         elif domain_split == 'channel':
             # ---- 按渠道划分 ----
             # 按渠道门店数量排名，后20%的渠道归目标域，其余归源域
-            if '渠道' in df_raw.columns:
-                channel_store_counts = df_raw.groupby('渠道')['name'].nunique().sort_values()
+            if '品牌渠道' in df_raw.columns:
+                channel_store_counts = df_raw.groupby('品牌渠道')['name'].nunique().sort_values()
 
                 # 后20%分位数作为阈值
                 threshold_20pct = channel_store_counts.quantile(0.6)
@@ -135,8 +165,8 @@ class Sale_Prediction(Dataset):
                 print(f'源域渠道数：{len(source_channels)}，'
                       f'涉及门店：{channel_store_counts[source_channels].sum()}家')
 
-                df_target = df_raw[df_raw['渠道'].isin(target_channels)].copy()
-                df_source = df_raw[df_raw['渠道'].isin(source_channels)].copy()
+                df_target = df_raw[df_raw['品牌渠道'].isin(target_channels)].copy()
+                df_source = df_raw[df_raw['品牌渠道'].isin(source_channels)].copy()
             else:
                 print('警告：数据集中未找到"渠道"列，所有数据作为目标域，源域为空')
                 df_target = df_raw.copy()
@@ -144,6 +174,46 @@ class Sale_Prediction(Dataset):
 
         else:
             raise ValueError(f'未知的域划分策略：{domain_split}，请选择 district 或 channel')
+
+        # 金佰利
+        # elif domain_split == 'channel':
+        #     # ---- 按渠道划分 ----
+        #     # 按渠道门店数量排名，后20%的渠道归目标域，其余归源域
+        #     if '渠道' in df_raw.columns:
+        #         channel_store_counts = df_raw.groupby('渠道')['name'].nunique().sort_values()
+        #
+        #         # 后20%分位数作为阈值
+        #         threshold_20pct = channel_store_counts.quantile(0.6)
+        #
+        #         target_channels = channel_store_counts[
+        #             channel_store_counts <= threshold_20pct
+        #             ].index.tolist()
+        #         source_channels = channel_store_counts[
+        #             channel_store_counts > threshold_20pct
+        #             ].index.tolist()
+        #
+        #         # 兜底：若所有渠道门店数相同导致目标域为空，取门店数最少的渠道
+        #         if len(target_channels) == 0:
+        #             target_channels = [channel_store_counts.index[0]]
+        #             source_channels = channel_store_counts.index[1:].tolist()
+        #             print(f'警告：所有渠道门店数相同，兜底取门店数最少的渠道：{target_channels}')
+        #
+        #         print(f'渠道门店数分布：\n{channel_store_counts}')
+        #         print(f'后20%门店数阈值：{threshold_20pct}')
+        #         print(f'目标域渠道数：{len(target_channels)}，'
+        #               f'涉及门店：{channel_store_counts[target_channels].sum()}家')
+        #         print(f'源域渠道数：{len(source_channels)}，'
+        #               f'涉及门店：{channel_store_counts[source_channels].sum()}家')
+        #
+        #         df_target = df_raw[df_raw['渠道'].isin(target_channels)].copy()
+        #         df_source = df_raw[df_raw['渠道'].isin(source_channels)].copy()
+        #     else:
+        #         print('警告：数据集中未找到"渠道"列，所有数据作为目标域，源域为空')
+        #         df_target = df_raw.copy()
+        #         df_source = pd.DataFrame(columns=df_raw.columns)
+        #
+        # else:
+        #     raise ValueError(f'未知的域划分策略：{domain_split}，请选择 district 或 channel')
         # ================================================================
 
         # 特征列定义
