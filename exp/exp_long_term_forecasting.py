@@ -19,7 +19,9 @@ warnings.filterwarnings('ignore')
 # ── 结果写入工具（与 run_batch.py 共享同一个 CSV） ──────────────────────────
 RESULT_DIR = os.path.join("output_hiersales", "result")
 # 美赞
-RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_all_exp.csv")
+# RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_all_exp.csv")
+# 美赞消融结果保存路径
+RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_ab.csv")
 # 金佰利
 # RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_result_all_exp.csv")
 
@@ -366,7 +368,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             phase           = phase,
         )
 
-        if write_csv and os.path.exists("output_hiersales"):
+        # 新增消融实验写入模块
+        is_ablation = getattr(self.args, 'ablation_mode', 'full') != 'full' \
+                      or getattr(self.args, 'freq_mode', 'both') != 'both' \
+                      or getattr(self.args, 'granularity_levels', 3) != 3
+
+        if write_csv and os.path.exists("output_hiersales") and not is_ablation:
+
+        # if write_csv and os.path.exists("output_hiersales"):
             result_dir  = os.path.join("output_hiersales", "result")
             os.makedirs(result_dir, exist_ok=True)
             old_result_path = os.path.join(result_dir, "k_value_experiment.csv")
