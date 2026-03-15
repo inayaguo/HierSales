@@ -21,9 +21,11 @@ RESULT_DIR = os.path.join("output_hiersales", "result")
 # 美赞
 # RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_all_exp.csv")
 # 美赞消融结果保存路径
-RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_ab.csv")
+# RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_ab.csv")
 # 金佰利
 # RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_result_all_exp.csv")
+# 金佰利消融结果保存路径
+RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_kim_ab.csv")
 
 RESULT_COLUMNS = [
     "run_time",
@@ -66,11 +68,20 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         super(Exp_Long_Term_Forecast, self).__init__(args)
         self.loss_k = args.loss_k if hasattr(args, 'loss_k') else 2
 
+    # 新增消融实验模型路由
     def _build_model(self):
-        model = self.model_dict[self.args.model].Model(self.args).float()
+        if self.args.model == 'HierDAabl':
+            from models.HierDA import AblationModel
+            model = AblationModel(self.args).float()
+        else:
+            model = self.model_dict[self.args.model].Model(self.args).float()
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
+        # model = self.model_dict[self.args.model].Model(self.args).float()
+        # if self.args.use_multi_gpu and self.args.use_gpu:
+        #     model = nn.DataParallel(model, device_ids=self.args.device_ids)
+        # return model
 
     def _get_data(self, flag):
         data_set, data_loader = data_provider(self.args, flag)

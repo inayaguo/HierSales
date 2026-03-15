@@ -433,3 +433,289 @@ class Model(nn.Module):
         )
         pred = torch.cat([pred_value.unsqueeze(-1), padding], dim=-1)
         return pred
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ★ 消融专用组件（新增，原有代码不受影响）
+# ══════════════════════════════════════════════════════════════════════════════
+
+class AblationDomainFeatureExtractor(nn.Module):
+    """
+    在 DomainFeatureExtractor 基础上新增两个消融维度：
+      granularity_levels : 1/2/3，控制使用几个粒度（Group2）
+      freq_mode          : 'both'/'time_only'/'freq_only'，控制时频分支（Group3）
+
+    网络结构固定按 granularity_levels 实例化，freq_mode 通过前向置零实现，
+    不改变参数量，保证与完整模型的公平对比。
+    """
+    def __init__(self, input_dim, n_filters, n_heads,
+                 granularity_levels=3, freq_mode='both'):
+        super().__init__()
+        self.granularity_levels = granularity_levels
+        self.freq_mode          = freq_mode
+        self.n_filters          = n_filters
+
+        self.time_extractors = nn.ModuleList([
+            SetFeat4(input_dim, n_filters, n_heads)
+            for _ in range(granularity_levels)
+        ])
+        self.freq_extractors = nn.ModuleList([
+            SetFeat4(input_dim, n_filters, n_heads)
+            for _ in range(granularity_levels)
+        ])
+        self.fusion_projs = nn.ModuleList([
+            nn.ModuleList([
+                nn.Linear(n_filters[layer] * 2, n_filters[layer])
+                for layer in range(3)
+            ])
+            for _ in range(granularity_levels)
+        ])
+
+    @staticmethod
+    def get_freq(x):
+        xf = torch.abs(fft.fft(x, dim=1))
+        return (xf - xf.mean(1, keepdim=True)) / (xf.std(1, keepdim=True) + 1e-8)
+
+    def forward(self, x):
+        seq_len = x.shape[1]
+        # 三个粒度起点；granularity_levels < 3 时只取前几个
+        all_starts = [0, seq_len // 2, seq_len - seq_len // 3]
+        starts = all_starts[:self.granularity_levels]
+
+        all_blocks, all_reprs = [], []
+        for level, start in enumerate(starts):
+            x_slice = x[:, start:, :]
+            x_freq  = self.get_freq(x_slice)
+
+            t_blocks, t_repr = self.time_extractors[level](x_slice)
+            f_blocks, f_repr = self.freq_extractors[level](x_freq)
+
+            # ── Group3 消融：置零对应分支，不改变网络结构 ──────────────────
+            # 使用 torch.zeros_like 产生同形状零张量，梯度不流过被置零分支
+            if self.freq_mode == 'time_only':
+                f_blocks = [torch.zeros_like(fb) for fb in f_blocks]
+                f_repr   = torch.zeros_like(f_repr)
+            elif self.freq_mode == 'freq_only':
+                t_blocks = [torch.zeros_like(tb) for tb in t_blocks]
+                t_repr   = torch.zeros_like(t_repr)
+
+            fused_blocks = [
+                self.fusion_projs[level][layer](
+                    torch.cat([t_blocks[layer], f_blocks[layer]], dim=-1)
+                )
+                for layer in range(3)
+            ]
+            all_blocks.append(fused_blocks)
+            all_reprs.append(torch.cat([t_repr, f_repr], dim=-1))
+
+        return all_blocks, all_reprs
+
+
+class AblationModel(nn.Module):
+    """
+    消融实验专用模型，与原始 Model 类完全独立，不修改后者任何代码。
+
+    通过 configs 读取以下消融参数（均有安全默认值，不传即等于完整模型）：
+
+    ablation_mode（str，默认 'full'）
+    ── Group1 VAE ──────────────────────────────────────────────────────────
+      'full'          完整模型基准
+      'wo_vae'        跳过VAE，直接用原始输入；loss_vae=0
+      'vae_noloss'    VAE补全路径保留，但loss_vae不加入extra_loss
+      'vae_detach'    VAE输出detach后送入特征提取，loss_vae=0
+
+    ── Group4 对齐损失 ──────────────────────────────────────────────────────
+      'wo_transport'  去掉loss_f，保留loss_c + loss_vae
+      'wo_grl'        去掉loss_c，保留loss_f + loss_vae
+      'wo_da'         去掉loss_f和loss_c，仅保留loss_vae
+      'no_source'     源域完全不参与，三项对齐损失全部跳过
+
+    ── Group6 预测头 ────────────────────────────────────────────────────────
+      'direct_pred'   去掉历史均值先验，直接 SalesPredictor(target_repr)
+      'prior_only'    仅输出 OutputScale(history_mean)，无残差
+      'no_scale'      有残差+先验，去掉 OutputScale 线性校正
+
+    granularity_levels（int，默认 3）── Group2 多粒度数量
+    freq_mode（str，默认 'both'）── Group3 时频双流
+      'both' / 'time_only' / 'freq_only'
+
+    lambda_f / lambda_c / lambda_vae（float）── 损失系数，默认与原模型一致
+    """
+
+    def __init__(self, configs):
+        super().__init__()
+        seq_len   = configs.seq_len
+        input_dim = configs.enc_in
+        device    = 'cuda' if configs.use_gpu else 'cpu'
+
+        self.device    = device
+        self.pred_len  = configs.pred_len
+        self.label_len = configs.label_len
+        self.input_dim = input_dim
+        self.extra_loss = None
+
+        # ── 消融控制参数（全部从 configs 读，有安全默认值） ──────────────────
+        self.ablation_mode      = getattr(configs, 'ablation_mode',      'full')
+        self.granularity_levels = getattr(configs, 'granularity_levels', 3)
+        self.freq_mode          = getattr(configs, 'freq_mode',          'both')
+        self.lf                 = getattr(configs, 'lambda_f',           0.001)
+        self.lc                 = getattr(configs, 'lambda_c',           0.001)
+        self.lv                 = getattr(configs, 'lambda_vae',         0.0001)
+
+        n_filters = getattr(configs, 'setfeat_filters', [64, 64, 64])
+        n_heads   = getattr(configs, 'setfeat_heads',   [4,  4,  4])
+        grl_alpha = getattr(configs, 'grl_alpha',        1.0)
+        feat_dim  = getattr(configs, 'feat_dim',         128)
+        repr_dim  = n_filters[-1] * 2
+
+        # ── (a) VAE ──────────────────────────────────────────────────────────
+        self.vae = VAEForSalesCompletion(seq_len, input_dim).to(device)
+
+        # ── (b) 特征提取器：使用支持消融的 AblationDomainFeatureExtractor ────
+        self.target_extractor = AblationDomainFeatureExtractor(
+            input_dim, n_filters, n_heads,
+            granularity_levels=self.granularity_levels,
+            freq_mode=self.freq_mode
+        ).to(device)
+        self.source_extractor = AblationDomainFeatureExtractor(
+            input_dim, n_filters, n_heads,
+            granularity_levels=self.granularity_levels,
+            freq_mode=self.freq_mode
+        ).to(device)
+
+        # ── (c) Transport Map 对齐 ────────────────────────────────────────────
+        self.align_loss_module = MultiLevelAlignmentLoss(
+            self.granularity_levels, n_filters).to(device)
+
+        # ── 表示融合 ──────────────────────────────────────────────────────────
+        self.target_fusion = RepresentationFusion(repr_dim, feat_dim).to(device)
+        self.source_fusion = RepresentationFusion(repr_dim, feat_dim).to(device)
+
+        # ── 预测头 & 域分类器 ──────────────────────────────────────────────────
+        self.sales_predictor   = SalesPredictor(feat_dim).to(device)
+        self.domain_classifier = DomainClassifier(feat_dim, grl_alpha).to(device)
+
+        self.output_scale = nn.Linear(1, 1).to(device)
+        nn.init.constant_(self.output_scale.weight, 1.0)
+        nn.init.constant_(self.output_scale.bias,   0.0)
+
+        self.residual_predictor = nn.Sequential(
+            nn.Linear(feat_dim + 1, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        ).to(device)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, x_target=None):
+        source_data = x_enc
+        target_data = x_target if x_target is not None else x_dec[:, :self.label_len, :]
+        ablation    = self.ablation_mode
+
+        # ══════════════════════════════════════════════════════════════════════
+        # (a) VAE 补全 ── Group1 消融
+        # ══════════════════════════════════════════════════════════════════════
+        if ablation == 'wo_vae':
+            # 完全跳过 VAE
+            src_comp = source_data
+            tgt_comp = target_data
+            loss_vae = torch.tensor(0.0, device=source_data.device)
+
+        else:
+            src_mask = torch.zeros_like(source_data)
+            tgt_mask = torch.zeros_like(target_data)
+            src_comp, s_mu, s_lv = self.vae(source_data, src_mask)
+            tgt_comp, t_mu, t_lv = self.vae(target_data, tgt_mask)
+
+            if ablation == 'no_source':
+                # 源域 VAE loss 不计
+                loss_vae = self.vae.loss_fn(tgt_comp, target_data, t_mu, t_lv)
+            else:
+                loss_vae = (
+                    self.vae.loss_fn(src_comp, source_data, s_mu, s_lv) +
+                    self.vae.loss_fn(tgt_comp, target_data, t_mu, t_lv)
+                ) / 2
+
+            if ablation == 'vae_detach':
+                # 阻断梯度回传至 VAE，loss_vae 同样不计
+                src_comp = src_comp.detach()
+                tgt_comp = tgt_comp.detach()
+                loss_vae = torch.tensor(0.0, device=source_data.device)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # (b) 特征提取 ── Group2/Group3 消融由 AblationDomainFeatureExtractor 内部处理
+        # ══════════════════════════════════════════════════════════════════════
+        tgt_blocks, tgt_reprs = self.target_extractor(tgt_comp)
+
+        if ablation == 'no_source':
+            # 源域不参与：用目标域 blocks/reprs 占位，保持接口一致
+            src_blocks = tgt_blocks
+            src_reprs  = tgt_reprs
+        else:
+            src_blocks, src_reprs = self.source_extractor(src_comp)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # (c) Transport Map 对齐 ── Group4 消融
+        # ══════════════════════════════════════════════════════════════════════
+        if ablation in ('wo_transport', 'wo_da', 'no_source'):
+            loss_f = torch.tensor(0.0, device=source_data.device)
+        else:
+            loss_f = self.align_loss_module(src_blocks, tgt_blocks)
+
+        # ── 表示融合 ──────────────────────────────────────────────────────────
+        target_repr = self.target_fusion(tgt_reprs)
+        source_repr = self.source_fusion(src_reprs)
+
+        # ── Domain Classifier / GRL ── Group4 消融 ───────────────────────────
+        if ablation in ('wo_grl', 'wo_da', 'no_source'):
+            loss_c = torch.tensor(0.0, device=source_data.device)
+        else:
+            domain_feat  = torch.cat([source_repr, target_repr], dim=0)
+            domain_label = torch.cat([
+                torch.zeros(source_repr.shape[0]),
+                torch.ones(target_repr.shape[0])
+            ]).to(source_data.device)
+            domain_pred = self.domain_classifier(domain_feat).squeeze(-1)
+            loss_c = F.binary_cross_entropy_with_logits(domain_pred, domain_label)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # extra_loss 组合
+        # ══════════════════════════════════════════════════════════════════════
+        if ablation == 'vae_noloss':
+            self.extra_loss = loss_f * self.lf + loss_c * self.lc
+        elif ablation in ('wo_vae', 'vae_detach'):
+            # loss_vae 已在上方置 0，仍按统一公式合并，语义清晰
+            self.extra_loss = loss_f * self.lf + loss_c * self.lc + loss_vae * self.lv
+        else:
+            self.extra_loss = loss_f * self.lf + loss_c * self.lc + loss_vae * self.lv
+
+        # ══════════════════════════════════════════════════════════════════════
+        # 预测头 ── Group6 消融
+        # ══════════════════════════════════════════════════════════════════════
+        history_mean = target_data[:, :, 0].mean(dim=1, keepdim=True)  # (B, 1)
+
+        if ablation == 'direct_pred':
+            # 去掉历史均值先验，直接预测
+            pred_value = self.sales_predictor(target_repr)              # (B, 1)
+
+        elif ablation == 'prior_only':
+            # 仅输出历史均值，无残差
+            pred_value = self.output_scale(history_mean)                # (B, 1)
+
+        elif ablation == 'no_scale':
+            # 有残差+先验，去掉 OutputScale
+            feat_with_prior = torch.cat([target_repr, history_mean], dim=-1)
+            residual        = self.residual_predictor(feat_with_prior)
+            pred_value      = history_mean + residual                   # (B, 1)
+
+        else:
+            # full 及所有其他消融变体：完整残差预测头
+            feat_with_prior = torch.cat([target_repr, history_mean], dim=-1)
+            residual        = self.residual_predictor(feat_with_prior)
+            pred_value      = self.output_scale(history_mean + residual)  # (B, 1)
+
+        pred_value = pred_value.expand(-1, self.pred_len)
+        padding = torch.zeros(
+            pred_value.shape[0], self.pred_len, self.input_dim - 1,
+            device=pred_value.device
+        )
+        return torch.cat([pred_value.unsqueeze(-1), padding], dim=-1)

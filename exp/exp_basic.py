@@ -14,7 +14,8 @@ class Exp_Basic(object):
             'CotMIX': CotMIX,
             'DANN': DANN,
             'DeepCoral': DeepCoral,
-            'RAINCOAT': RAINCOAT
+            'RAINCOAT': RAINCOAT,
+            'HierDAabl': HierDA, # HierDA 消融实验
         }
         self.device = self._acquire_device()
         # self.model = self._build_model().cuda()
