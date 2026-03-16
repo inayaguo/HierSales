@@ -16,7 +16,7 @@ RESULT_DIR = os.path.join("output_hiersales", "result")
 # 金佰利
 # RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_all.csv")
 # 美赞
-RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_mz_results_all.csv")
+RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_mz_0316.csv")
 ERROR_LOG  = os.path.join(RESULT_DIR, "experiment_error.log")
 
 RESULT_COLUMNS = [
@@ -387,15 +387,15 @@ if __name__ == "__main__":
 
         # ── 参与 hierda 模式对比的模型（target/source_only 自动只取第一个） ───
         models = [
-            # "HierDA",       # 本文模型（多粒度时频 + Transport Map + GRL）
-            "DANN",         # 经典对抗域适应（JMLR 2016）
-            "DeepCoral",    # 二阶统计对齐（ECCV 2016）
-            "CoDATS",       # 时序感知对抗（KDD 2020）
-            "AdvSKM",       # 谱核匹配（IJCAI 2021）
-            "RAINCOAT",     # 时频原型对齐（ICML 2023）
-            "CotMIX",       # 时序上下文混合（CIKM 2023）
-            "AdaMatch",     # 分布对齐伪标签（ICLR 2022）
-            "ACON",         # 时频相关子空间对抗（NeurIPS 2024）
+            "HierDA",       # 本文模型（多粒度时频 + Transport Map + GRL）
+            # "DANN",         # 经典对抗域适应（JMLR 2016）
+            # "DeepCoral",    # 二阶统计对齐（ECCV 2016）
+            # "CoDATS",       # 时序感知对抗（KDD 2020）
+            # "AdvSKM",       # 谱核匹配（IJCAI 2021）
+            # "RAINCOAT",     # 时频原型对齐（ICML 2023）
+            # "CotMIX",       # 时序上下文混合（CIKM 2023）
+            # "AdaMatch",     # 分布对齐伪标签（ICLR 2022）
+            # "ACON",         # 时频相关子空间对抗（NeurIPS 2024）
         ],
 
         # ── 数据文件模板 ──────────────────────────────────────────────────────

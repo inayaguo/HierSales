@@ -58,6 +58,18 @@ class LinearAttention(nn.Module):
         attn = F.softmax(torch.matmul(q, k.transpose(-2, -1)) / scale, dim=-1)
         return self.linear_final(torch.matmul(attn, v))
 
+def mmd_loss(src, tgt):
+    """RBF 核的 MMD，直接衡量两个分布的距离"""
+    def rbf_kernel(x, y, sigma=1.0):
+        diff = x.unsqueeze(1) - y.unsqueeze(0)        # (B, B, D)
+        dist = (diff ** 2).sum(-1)                     # (B, B)
+        return torch.exp(-dist / (2 * sigma ** 2))
+
+    k_ss = rbf_kernel(src, src).mean()
+    k_tt = rbf_kernel(tgt, tgt).mean()
+    k_st = rbf_kernel(src, tgt).mean()
+    return k_ss + k_tt - 2 * k_st
+
 
 class SetFeat4(nn.Module):
     """
@@ -410,12 +422,18 @@ class Model(nn.Module):
         domain_pred = self.domain_classifier(domain_feat).squeeze(-1)
         loss_c = F.binary_cross_entropy_with_logits(domain_pred, domain_label)
 
+        loss_mmd = mmd_loss(source_repr, target_repr)
+
         # ── 辅助损失挂载（训练循环中累加到 Loss P）───────────────────────────
         # self.extra_loss = loss_f * 0.01 + loss_c * 0.01 + loss_vae * 0.001
-        self.extra_loss = loss_f * 0.001 + loss_c * 0.001 + loss_vae * 0.0001
+        # self.extra_loss = loss_f * 0.001 + loss_c * 0.001 + loss_vae * 0.0001
+        # self.extra_loss = loss_f * 0.1 + loss_c * 0.1 + loss_vae * 0.001
+        self.extra_loss = loss_f * 0.1 + loss_c * 0.1 + loss_vae * 0.001 + loss_mmd * 0.5
 
         # 历史销量均值作为先验基准（只取第0列即销量列）
-        history_mean = target_data[:, :, 0].mean(dim=1, keepdim=True)  # (batch, 1)
+        # history_mean = target_data[:, :, 0].mean(dim=1, keepdim=True)  # (batch, 1)
+        # 在 HierDA.py 的 forward 里修改这一行
+        history_mean = target_data[:, :, 0].mean(dim=1, keepdim=True).detach()  # 加 detach
 
         # 将历史均值拼接到特征向量，辅助预测
         feat_with_prior = torch.cat([target_repr, history_mean], dim=-1)  # (batch, feat_dim+1)

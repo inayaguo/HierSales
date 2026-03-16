@@ -19,7 +19,7 @@ import pandas as pd
 import torch
 
 RESULT_DIR  = os.path.join("output_hiersales", "ab_result")
-RESULT_CSV  = os.path.join(RESULT_DIR, "ablation_results_kim_test.csv")
+RESULT_CSV  = os.path.join(RESULT_DIR, "ablation_results_mz.csv")
 ERROR_LOG   = os.path.join(RESULT_DIR, "ablation_error_kim.log")
 
 RESULT_COLUMNS = [
@@ -333,13 +333,14 @@ def run_ablation_experiment(config: dict):
 
 if __name__ == "__main__":
     ABLATION_CONFIG = dict(
-        groups        = ["G2_granularity", "G3_freq", "G4_align", "G6_pred"],
+        groups        = ["G3_freq"],
+        # "G2_granularity", "G4_align", "G6_pred"
         # "G1_vae",
-    #     months        = [202208, 202209, 202210, 202211, 202212,
-    # 202301, 202302, 202303],
-        months=[202305, 202306, 202307, 202308, 202309, 202310, 202311, 202312],
+        months        = [202208, 202209, 202210, 202211, 202212,
+    202301, 202302, 202303],
+    #     months=[202305, 202306, 202307, 202308, 202309, 202310, 202311, 202312],
         domain_splits = ["district", "channel"],
-        data_template = "deep_train_{month}_with_store_info.csv",
+        data_template = "deep_train_mz_{month}_with_store_info.csv",
         lambda_f      = 0.001,
         lambda_c      = 0.001,
         lambda_vae    = 0.0001,
@@ -356,6 +357,6 @@ if __name__ == "__main__":
         pred_len        = 1,
         train_epochs    = 10,
         patience        = 3,
-        is_training     = 0,
+        is_training     = 1,
     )
     run_ablation_experiment(ABLATION_CONFIG)

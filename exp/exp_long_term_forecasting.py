@@ -19,13 +19,13 @@ warnings.filterwarnings('ignore')
 # ── 结果写入工具（与 run_batch.py 共享同一个 CSV） ──────────────────────────
 RESULT_DIR = os.path.join("output_hiersales", "result")
 # 美赞
-# RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_all_exp.csv")
+RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_0316.csv")
 # 美赞消融结果保存路径
 # RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_mz_ab.csv")
 # 金佰利
 # RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_result_all_exp.csv")
 # 金佰利消融结果保存路径
-RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_kim_ab.csv")
+# RESULT_CSV = os.path.join(RESULT_DIR, "batch_experiment_results_kim_ab.csv")
 
 RESULT_COLUMNS = [
     "run_time",
